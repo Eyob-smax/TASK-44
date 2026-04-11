@@ -1,0 +1,20 @@
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-campusops_root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-campusops}
+      MYSQL_USER: ${MYSQL_USER:-campusops}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-campusops_pass}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+
+volumes:
+  mysql-data:

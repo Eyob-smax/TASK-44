@@ -1,5 +1,5 @@
 FROM node:18-alpine
-RUN apk add --no-cache mysql-client
+RUN apk add --no-cache mysql-client openssl
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -10,8 +10,8 @@ RUN npx prisma generate
 
 COPY . .
 RUN npm run build
-
-RUN npm prune --production
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 4000
-CMD ["node", "dist/index.js"]
+CMD ["docker-entrypoint.sh"]

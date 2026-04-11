@@ -13,7 +13,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COVERAGE="${COVERAGE:-false}"
-COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-campusops-test-runner}"
 
 FRONTEND_TEST_IMAGE="${FRONTEND_TEST_IMAGE:-node:18-alpine}"
@@ -41,15 +40,20 @@ to_docker_host_path() {
   fi
 }
 
+COMPOSE_FILE="$(to_docker_host_path "$SCRIPT_DIR/docker-compose.test.yml")"
 FRONTEND_SRC="$(to_docker_host_path "$SCRIPT_DIR/frontend")"
 BACKEND_SRC="$(to_docker_host_path "$SCRIPT_DIR/backend")"
+
+docker_cmd() {
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker "$@"
+}
 
 compose_cmd() {
   JWT_SECRET="$TEST_JWT_SECRET" \
   INTEGRATION_SIGNING_SECRET="$TEST_INTEGRATION_SIGNING_SECRET" \
   AES_KEY="$TEST_AES_KEY" \
   COMPOSE_IGNORE_ORPHANS="True" \
-  docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
+  docker_cmd compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
 }
 
 cleanup() {
@@ -86,7 +90,7 @@ run_frontend_tests() {
     test_cmd+=" --coverage"
   fi
 
-  docker run --rm \
+  docker_cmd run --rm \
     --mount type=volume,source="$NPM_CACHE_VOLUME",target=/root/.npm \
     --mount type=bind,source="$FRONTEND_SRC",target=/src,readonly \
     "$FRONTEND_TEST_IMAGE" \
@@ -99,7 +103,7 @@ run_backend_unit_tests() {
     test_cmd+=" --coverage"
   fi
 
-  docker run --rm \
+  docker_cmd run --rm \
     --mount type=volume,source="$NPM_CACHE_VOLUME",target=/root/.npm \
     --mount type=bind,source="$BACKEND_SRC",target=/src,readonly \
     -e DATABASE_URL="$DATABASE_URL" \
@@ -112,7 +116,7 @@ run_backend_unit_tests() {
 }
 
 run_backend_api_tests() {
-  docker run --rm \
+  docker_cmd run --rm \
     --mount type=volume,source="$NPM_CACHE_VOLUME",target=/root/.npm \
     --mount type=bind,source="$BACKEND_SRC",target=/src,readonly \
     -e DATABASE_URL="$DATABASE_URL" \
@@ -135,7 +139,7 @@ wait_for_mysql_healthy() {
   local attempts=30
   while [[ "$attempts" -gt 0 ]]; do
     local health
-    health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' "$container_id" 2>/dev/null || true)"
+    health="$(docker_cmd inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' "$container_id" 2>/dev/null || true)"
     if [[ "$health" == "healthy" ]]; then
       return 0
     fi
@@ -149,12 +153,12 @@ wait_for_mysql_healthy() {
 
 run_backend_integration_tests() {
   echo "  ℹ  Starting MySQL service for integration tests..."
-  compose_cmd up -d mysql >/dev/null
+  compose_cmd up -d mysql >/dev/null || return 1
   echo "  ℹ  Waiting for MySQL healthcheck..."
-  wait_for_mysql_healthy
+  wait_for_mysql_healthy || return 1
   echo "  ℹ  MySQL is healthy. Running integration tests..."
 
-  docker run --rm \
+  docker_cmd run --rm \
     --network "$NETWORK_NAME" \
     --mount type=volume,source="$NPM_CACHE_VOLUME",target=/root/.npm \
     -e DATABASE_URL="$DATABASE_URL" \
@@ -166,7 +170,7 @@ run_backend_integration_tests() {
     -e NODE_ENV="test" \
     --mount type=bind,source="$BACKEND_SRC",target=/src,readonly \
     "$BACKEND_INT_TEST_IMAGE" \
-    sh -lc "set -e; echo '[backend-int] installing mysql client...'; if command -v apk >/dev/null 2>&1; then apk add --no-cache mysql-client >/dev/null; elif command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y default-mysql-client >/dev/null; else echo 'No supported package manager found for mysql client install'; exit 1; fi; echo '[backend-int] preparing workspace...'; mkdir -p /work; cp -a /src/. /work; cd /work; echo '[backend-int] installing dependencies...'; npm ci --no-audit --no-fund --loglevel=info; echo '[backend-int] syncing prisma schema...'; npx prisma db push --skip-generate --accept-data-loss; echo '[backend-int] running tests...'; npx vitest run --reporter=verbose --maxWorkers=1 api_tests/integration"
+    sh -lc "set -e; echo '[backend-int] installing runtime packages...'; if command -v apk >/dev/null 2>&1; then apk add --no-cache mysql-client openssl >/dev/null; elif command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y default-mysql-client openssl >/dev/null; else echo 'No supported package manager found for test runtime install'; exit 1; fi; echo '[backend-int] preparing workspace...'; mkdir -p /work; cp -a /src/. /work; cd /work; echo '[backend-int] installing dependencies...'; npm ci --no-audit --no-fund --loglevel=info; echo '[backend-int] syncing prisma schema...'; npx prisma db push --skip-generate --accept-data-loss; echo '[backend-int] ensuring prisma migration metadata table exists for restore verification...'; mysql -h mysql -u \"$MYSQL_USER\" -p\"$MYSQL_PASSWORD\" \"$MYSQL_DATABASE\" < /work/prisma/test-bootstrap.sql; echo '[backend-int] running tests...'; npx vitest run --reporter=verbose --maxWorkers=1 api_tests/integration"
 }
 
 echo ""
