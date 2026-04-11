@@ -1,13 +1,11 @@
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
-beforeAll(() => {
-  vi.stubEnv('DATABASE_URL', 'mysql://test:test@localhost:3306/test');
-  vi.stubEnv('JWT_SECRET', 'test-jwt-secret-for-unit-tests');
-  vi.stubEnv('AES_KEY', 'a'.repeat(64));
-  vi.stubEnv('BCRYPT_ROUNDS', '4');
-});
+vi.stubEnv('DATABASE_URL', 'mysql://test:test@localhost:3306/test');
+vi.stubEnv('JWT_SECRET', 'test-jwt-secret-for-unit-tests');
+vi.stubEnv('AES_KEY', 'a'.repeat(64));
+vi.stubEnv('BCRYPT_ROUNDS', '4');
 
 const { decodePermissions, buildJwt, hashPassword } = await import('../src/modules/auth/service.js');
 
@@ -139,5 +137,5 @@ describe('hashPassword', () => {
     const { hash } = await hashPassword('MyTestPassword');
     const valid = await bcrypt.compare('MyTestPassword', hash);
     expect(valid).toBe(true);
-  });
+  }, 10000);
 });

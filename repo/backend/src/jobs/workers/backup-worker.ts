@@ -20,6 +20,12 @@ function withMysqlPassword(pass: string): NodeJS.ProcessEnv {
   };
 }
 
+function mysqlSslArgs(): string {
+  const sslMode = process.env['MYSQL_SSL_MODE'];
+  if (!sslMode) return '';
+  return sslMode.toUpperCase() === 'DISABLED' ? '--skip-ssl ' : `--ssl-mode=${sslMode} `;
+}
+
 function parseDbUrl(url: string) {
   const parsed = new URL(url);
   return {
@@ -56,7 +62,7 @@ export class BackupWorker extends BaseWorker {
       const { host, port, user, pass, dbname } = parseDbUrl(db_url);
 
       execSync(
-        `mysqldump -h ${host} -P ${port} -u ${user} ${dbname} > "${dumpPath}"`,
+        `mysqldump ${mysqlSslArgs()}-h ${host} -P ${port} -u ${user} ${dbname} > "${dumpPath}"`,
         {
           stdio: ['ignore', 'pipe', 'pipe'],
           env: withMysqlPassword(pass),

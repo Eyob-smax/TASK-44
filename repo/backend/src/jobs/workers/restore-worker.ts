@@ -19,6 +19,12 @@ function withMysqlPassword(pass: string): NodeJS.ProcessEnv {
   };
 }
 
+function mysqlSslArgs(): string {
+  const sslMode = process.env['MYSQL_SSL_MODE'];
+  if (!sslMode) return '';
+  return sslMode.toUpperCase() === 'DISABLED' ? '--skip-ssl ' : `--ssl-mode=${sslMode} `;
+}
+
 function parseDbUrl(url: string) {
   const parsed = new URL(url);
   return {
@@ -108,7 +114,7 @@ export class RestoreWorker extends BaseWorker {
       // This is an admin-triggered operation — the administrator is expected to
       // understand this replaces all current data with the backup snapshot.
       execSync(
-        `mysql -h ${host} -P ${port} -u ${user} ${dbname} < "${dumpPath}"`,
+        `mysql ${mysqlSslArgs()}-h ${host} -P ${port} -u ${user} ${dbname} < "${dumpPath}"`,
         {
           stdio: ['ignore', 'pipe', 'pipe'],
           env: withMysqlPassword(pass),

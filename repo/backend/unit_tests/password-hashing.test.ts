@@ -1,12 +1,10 @@
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import bcrypt from 'bcryptjs';
 
-beforeAll(() => {
-  vi.stubEnv('DATABASE_URL', 'mysql://test:test@localhost:3306/test');
-  vi.stubEnv('JWT_SECRET', 'test-jwt-secret-value');
-  vi.stubEnv('AES_KEY', 'a'.repeat(64));
-  vi.stubEnv('BCRYPT_ROUNDS', '4'); // Low rounds for test speed
-});
+vi.stubEnv('DATABASE_URL', 'mysql://test:test@localhost:3306/test');
+vi.stubEnv('JWT_SECRET', 'test-jwt-secret-value');
+vi.stubEnv('AES_KEY', 'a'.repeat(64));
+vi.stubEnv('BCRYPT_ROUNDS', '4'); // Low rounds for test speed
 
 const { hashPassword } = await import('../src/modules/auth/service.js');
 

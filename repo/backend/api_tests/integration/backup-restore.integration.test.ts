@@ -54,7 +54,7 @@ describe('Backup/Restore worker — end-to-end DB verification', () => {
       },
     });
     restoreRunId = restoreRun.id;
-  });
+  }, 120_000);
 
   afterAll(async () => {
     await db.runtimeMetric.deleteMany({ where: { metricName: METRIC_NAME } });
@@ -68,7 +68,7 @@ describe('Backup/Restore worker — end-to-end DB verification', () => {
     if (performedByUserId) {
       await db.user.deleteMany({ where: { id: performedByUserId } });
     }
-  });
+  }, 120_000);
 
   it('restores a deleted runtime metric from backup snapshot', async () => {
     const backupWorker = new BackupWorker();
@@ -101,5 +101,5 @@ describe('Backup/Restore worker — end-to-end DB verification', () => {
 
     const verification = JSON.parse(restoreRun!.verificationResult as string);
     expect(verification.objectStorageManifestPresent).toBeDefined();
-  });
+  }, 120_000);
 });

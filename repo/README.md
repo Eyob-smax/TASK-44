@@ -214,7 +214,7 @@ See `docs/test-traceability.md` for the full requirement-to-test mapping.
 
 ## Running the Application
 
-> **Do not run Docker yet** — Docker assets are complete enough for later `docker compose up`.
+> Docker startup is self-contained. `docker compose up --build` builds the images, syncs the backend schema, and starts the stack.
 
 When ready:
 ```bash
@@ -222,7 +222,7 @@ When ready:
 cp .env.example .env
 
 # From repo/ root:
-docker compose up
+docker compose up --build
 ```
 
 Required environment variables (see `.env.example` for the full reference):

@@ -10,8 +10,6 @@ RUN npx prisma generate
 
 COPY . .
 RUN npm run build
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 4000
-CMD ["docker-entrypoint.sh"]
+CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/index.js"]

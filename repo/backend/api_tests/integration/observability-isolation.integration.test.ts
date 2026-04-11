@@ -21,9 +21,24 @@ describe('Observability — org-scoped log isolation (DB-backed)', () => {
     // Create three logs: one for org-a, one for org-b, one platform-wide (null)
     await db.applicationLog.createMany({
       data: [
-        { level: 'info', message: `[${RUN_ID}] org-a log`, orgId: ORG_A },
-        { level: 'info', message: `[${RUN_ID}] org-b log`, orgId: ORG_B },
-        { level: 'info', message: `[${RUN_ID}] platform log`, orgId: null },
+        {
+          level: 'info',
+          message: `[${RUN_ID}] org-a log`,
+          messageSearch: `[${RUN_ID}] org-a log`,
+          orgId: ORG_A,
+        },
+        {
+          level: 'info',
+          message: `[${RUN_ID}] org-b log`,
+          messageSearch: `[${RUN_ID}] org-b log`,
+          orgId: ORG_B,
+        },
+        {
+          level: 'info',
+          message: `[${RUN_ID}] platform log`,
+          messageSearch: `[${RUN_ID}] platform log`,
+          orgId: null,
+        },
       ],
     });
   });

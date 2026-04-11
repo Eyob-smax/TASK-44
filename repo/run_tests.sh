@@ -162,6 +162,7 @@ run_backend_integration_tests() {
     --network "$NETWORK_NAME" \
     --mount type=volume,source="$NPM_CACHE_VOLUME",target=/root/.npm \
     -e DATABASE_URL="$DATABASE_URL" \
+    -e MYSQL_SSL_MODE="DISABLED" \
     -e JWT_SECRET="$TEST_JWT_SECRET" \
     -e AES_KEY="$TEST_AES_KEY" \
     -e INTEGRATION_SIGNING_SECRET="$TEST_INTEGRATION_SIGNING_SECRET" \
@@ -170,7 +171,7 @@ run_backend_integration_tests() {
     -e NODE_ENV="test" \
     --mount type=bind,source="$BACKEND_SRC",target=/src,readonly \
     "$BACKEND_INT_TEST_IMAGE" \
-    sh -lc "set -e; echo '[backend-int] installing runtime packages...'; if command -v apk >/dev/null 2>&1; then apk add --no-cache mysql-client openssl >/dev/null; elif command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y default-mysql-client openssl >/dev/null; else echo 'No supported package manager found for test runtime install'; exit 1; fi; echo '[backend-int] preparing workspace...'; mkdir -p /work; cp -a /src/. /work; cd /work; echo '[backend-int] installing dependencies...'; npm ci --no-audit --no-fund --loglevel=info; echo '[backend-int] syncing prisma schema...'; npx prisma db push --skip-generate --accept-data-loss; echo '[backend-int] ensuring prisma migration metadata table exists for restore verification...'; mysql -h mysql -u \"$MYSQL_USER\" -p\"$MYSQL_PASSWORD\" \"$MYSQL_DATABASE\" < /work/prisma/test-bootstrap.sql; echo '[backend-int] running tests...'; npx vitest run --reporter=verbose --maxWorkers=1 api_tests/integration"
+    sh -lc "set -e; echo '[backend-int] installing runtime packages...'; if command -v apk >/dev/null 2>&1; then apk add --no-cache mysql-client openssl >/dev/null; elif command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y default-mysql-client openssl >/dev/null; else echo 'No supported package manager found for test runtime install'; exit 1; fi; echo '[backend-int] preparing workspace...'; mkdir -p /work; cp -a /src/. /work; cd /work; echo '[backend-int] installing dependencies...'; npm ci --no-audit --no-fund --loglevel=info; echo '[backend-int] syncing prisma schema...'; npx prisma db push --skip-generate --accept-data-loss; echo '[backend-int] ensuring prisma migration metadata table exists for restore verification...'; mysql --skip-ssl -h mysql -u \"$MYSQL_USER\" -p\"$MYSQL_PASSWORD\" \"$MYSQL_DATABASE\" < /work/prisma/test-bootstrap.sql; echo '[backend-int] running tests...'; npx vitest run --reporter=verbose --pool forks api_tests/integration"
 }
 
 echo ""
