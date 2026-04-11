@@ -1,0 +1,64 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: campusops-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-campusops_root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-campusops}
+      MYSQL_USER: ${MYSQL_USER:-campusops}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-campusops_pass}
+    ports:
+      - '3306:3306'
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: campusops-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://${MYSQL_USER:-campusops}:${MYSQL_PASSWORD:-campusops_pass}@mysql:3306/${MYSQL_DATABASE:-campusops}
+      PORT: 4000
+      JWT_SECRET: ${JWT_SECRET}
+      INTEGRATION_SIGNING_SECRET: ${INTEGRATION_SIGNING_SECRET}
+      AES_KEY: ${AES_KEY}
+      STORAGE_PATH: /data/object-storage
+      BACKUP_PATH: /data/backups
+      TLS_CERT_PATH: /certs/server.crt
+      TLS_KEY_PATH: /certs/server.key
+    # No host port binding — backend is only reachable within the Docker network
+    # via https://backend:4000 (proxied by nginx frontend on port 443).
+    volumes:
+      - object-storage:/data/object-storage
+      - backup-storage:/data/backups
+      - ${CERT_PATH:-./certs}:/certs:ro
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: campusops-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - '443:443'
+    volumes:
+      - ${CERT_PATH:-./certs}:/certs:ro
+
+volumes:
+  mysql-data:
+  object-storage:
+  backup-storage:

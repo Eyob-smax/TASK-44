@@ -1,0 +1,23 @@
+-- CampusOps — Bootstrap Administrator Template (manual one-time setup)
+--
+-- 1) Generate a bcrypt hash for your chosen password (12 rounds recommended):
+--    node -e "const b=require('bcryptjs'); b.hash(process.argv[1], 12).then((h)=>console.log(h));" "<STRONG_PASSWORD>"
+--
+-- 2) Replace placeholders below and execute this script once.
+--
+-- IMPORTANT:
+-- - Do not commit real credentials or password hashes to source control.
+-- - Rotate bootstrap credentials immediately after first login.
+
+INSERT INTO users (id, username, password_hash, salt, display_name, is_active)
+VALUES (
+  'user-bootstrap-admin',
+  '<ADMIN_USERNAME>',
+  '<BCRYPT_HASH>',
+  'operator-managed',
+  'Platform Administrator',
+  TRUE
+);
+
+INSERT INTO user_roles (id, user_id, role_id)
+VALUES ('ur-admin-bootstrap', 'user-bootstrap-admin', 'role-administrator');

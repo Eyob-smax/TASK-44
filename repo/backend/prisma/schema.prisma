@@ -1,0 +1,1230 @@
+// CampusOps — Prisma Schema
+// Full domain model for the CampusOps Fulfillment & Operations Platform
+// MySQL 8.0 — disconnected LAN deployment
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// AUTH & SECURITY
+// ============================================================================
+
+model User {
+  id              String   @id @default(uuid()) @db.VarChar(36)
+  username        String   @unique @db.VarChar(100)
+  passwordHash    String   @db.VarChar(255)
+  salt            String   @db.VarChar(64)
+  displayName     String   @db.VarChar(200)
+  isActive        Boolean  @default(true)
+  lastLoginAt     DateTime?
+  failedAttempts  Int      @default(0)
+  lockedUntil     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  orgId           String?  @db.VarChar(36)
+
+  organization           Organization? @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  userRoles              UserRole[]
+  loginAttempts          LoginAttempt[]
+  securityEvents         SecurityEvent[]
+  anomalyAcknowledgements AnomalyAcknowledgement[]
+  anomalyAssignmentsBy   AnomalyAssignment[]       @relation("AssignedBy")
+  anomalyAssignmentsTo   AnomalyAssignment[]       @relation("AssignedTo")
+  anomalyResolutions     AnomalyResolution[]
+  parkingEscalations     ParkingEscalation[]
+  ticketsCreated         AfterSalesTicket[]        @relation("TicketCreatedBy")
+  ticketsAssigned        AfterSalesTicket[]        @relation("TicketAssignedTo")
+  ticketTimelineEntries  TicketTimeline[]
+  evidenceUploads        EvidenceAsset[]
+  compensationApprovals  CompensationApproval[]
+  alertAcknowledgements  AlertEvent[]
+  importJobs             ImportJob[]
+  exportJobs             ExportJob[]
+  restoreRuns            RestoreRun[]
+  fileAssets             FileAsset[]
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  name        String   @unique @db.VarChar(50)
+  description String?  @db.VarChar(500)
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+  maskingRules    FieldMaskingRule[]
+  notifications   NotificationEvent[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id       String @id @default(uuid()) @db.VarChar(36)
+  action   String @db.VarChar(100)
+  resource String @db.VarChar(100)
+  scope    String @default("*") @db.VarChar(100)
+
+  rolePermissions RolePermission[]
+
+  @@unique([action, resource, scope])
+  @@map("permissions")
+}
+
+model UserRole {
+  id     String @id @default(uuid()) @db.VarChar(36)
+  userId String @db.VarChar(36)
+  roleId String @db.VarChar(36)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  id           String @id @default(uuid()) @db.VarChar(36)
+  roleId       String @db.VarChar(36)
+  permissionId String @db.VarChar(36)
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model LoginAttempt {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  userId    String?  @db.VarChar(36)
+  username  String   @db.VarChar(100)
+  success   Boolean
+  ipAddress String   @db.VarChar(45)
+  timestamp DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([username, timestamp])
+  @@map("login_attempts")
+}
+
+model SecurityEvent {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  eventType String   @db.VarChar(100)
+  userId    String?  @db.VarChar(36)
+  details   String   @db.Text // AES-256 encrypted at rest — encryption impl deferred
+  ipAddress String   @db.VarChar(45)
+  timestamp DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([eventType, timestamp])
+  @@map("security_events")
+}
+
+model FieldMaskingRule {
+  id       String @id @default(uuid()) @db.VarChar(36)
+  roleId   String @db.VarChar(36)
+  resource String @db.VarChar(100)
+  field    String @db.VarChar(100)
+  maskType String @db.VarChar(50) // full, partial, hash
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, resource, field])
+  @@map("field_masking_rules")
+}
+
+// ============================================================================
+// MASTER DATA
+// ============================================================================
+
+model Organization {
+  id       String @id @default(uuid()) @db.VarChar(36)
+  name     String @db.VarChar(200)
+  type     String @db.VarChar(50) // district, school, campus_group
+  timezone String @default("America/Chicago") @db.VarChar(50)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users             User[]
+  campuses          Campus[]
+  students          Student[]
+  semesters         Semester[]
+  warehouses        Warehouse[]
+  carriers          Carrier[]
+  deliveryZones     DeliveryZone[]
+  nonServiceableZips NonServiceableZip[]
+  shippingFeeTemplates ShippingFeeTemplate[]
+  tickets           AfterSalesTicket[]
+  membershipTiers   MembershipTier[]
+  members           Member[]
+  coupons           Coupon[]
+  memberPricingRules MemberPricingRule[]
+  fulfillmentRequests FulfillmentRequest[]
+  compensationPolicies CompensationPolicy[]
+
+  @@map("organizations")
+}
+
+model Campus {
+  id     String @id @default(uuid()) @db.VarChar(36)
+  orgId  String @db.VarChar(36)
+  name   String @db.VarChar(200)
+  address String? @db.VarChar(500)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  departments  Department[]
+  classrooms   Classroom[]
+  parkingFacilities ParkingFacility[]
+
+  @@map("campuses")
+}
+
+model Department {
+  id       String @id @default(uuid()) @db.VarChar(36)
+  campusId String @db.VarChar(36)
+  name     String @db.VarChar(200)
+  code     String @db.VarChar(20)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campus  Campus   @relation(fields: [campusId], references: [id], onDelete: Cascade)
+  courses Course[]
+
+  @@unique([campusId, code])
+  @@map("departments")
+}
+
+model Course {
+  id       String @id @default(uuid()) @db.VarChar(36)
+  deptId   String @db.VarChar(36)
+  name     String @db.VarChar(200)
+  code     String @db.VarChar(20)
+  credits  Int    @default(3)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  department Department @relation(fields: [deptId], references: [id], onDelete: Cascade)
+  classes    Class[]
+
+  @@unique([deptId, code])
+  @@map("courses")
+}
+
+model Semester {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  orgId     String   @db.VarChar(36)
+  name      String   @db.VarChar(100)
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  classes      Class[]
+
+  @@map("semesters")
+}
+
+model Class {
+  id         String @id @default(uuid()) @db.VarChar(36)
+  courseId   String @db.VarChar(36)
+  semesterId String @db.VarChar(36)
+  section    String @db.VarChar(20)
+  capacity   Int    @default(30)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  course      Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  semester    Semester         @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  enrollments ClassEnrollment[]
+
+  @@unique([courseId, semesterId, section])
+  @@map("classes")
+}
+
+model Student {
+  id            String   @id @default(uuid()) @db.VarChar(36)
+  orgId         String   @db.VarChar(36)
+  studentNumber String   @db.VarChar(50)
+  firstName     String   @db.VarChar(100)
+  lastName      String   @db.VarChar(100)
+  email         String?  @db.VarChar(200)
+  enrolledAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  organization Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  enrollments  ClassEnrollment[]
+  members      Member[]
+
+  @@unique([orgId, studentNumber])
+  @@map("students")
+}
+
+model ClassEnrollment {
+  id         String   @id @default(uuid()) @db.VarChar(36)
+  classId    String   @db.VarChar(36)
+  studentId  String   @db.VarChar(36)
+  enrolledAt DateTime @default(now())
+
+  class   Class   @relation(fields: [classId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([classId, studentId])
+  @@map("class_enrollments")
+}
+
+// ============================================================================
+// CLASSROOM OPERATIONS
+// ============================================================================
+
+model Classroom {
+  id              String    @id @default(uuid()) @db.VarChar(36)
+  campusId        String    @db.VarChar(36)
+  name            String    @db.VarChar(200)
+  building        String?   @db.VarChar(100)
+  room            String?   @db.VarChar(50)
+  capacity        Int       @default(30)
+  status          String    @default("offline") @db.VarChar(20) // online, offline, degraded
+  lastHeartbeatAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  campus               Campus                      @relation(fields: [campusId], references: [id], onDelete: Cascade)
+  heartbeats           ClassroomHeartbeat[]
+  confidenceSamples    RecognitionConfidenceSample[]
+  anomalyEvents        AnomalyEvent[]
+
+  @@map("classrooms")
+}
+
+model ClassroomHeartbeat {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  classroomId String   @db.VarChar(36)
+  receivedAt  DateTime @default(now())
+  metadata    String?  @db.Text // JSON payload from classroom agent
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+
+  @@index([classroomId, receivedAt])
+  @@map("classroom_heartbeats")
+}
+
+model RecognitionConfidenceSample {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  classroomId String   @db.VarChar(36)
+  confidence  Float    // 0.0 to 1.0
+  sampledAt   DateTime @default(now())
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+
+  @@index([classroomId, sampledAt])
+  @@map("recognition_confidence_samples")
+}
+
+model AnomalyEvent {
+  id          String    @id @default(uuid()) @db.VarChar(36)
+  classroomId String    @db.VarChar(36)
+  type        String    @db.VarChar(50) // connectivity_loss, confidence_drop, unauthorized_access, etc.
+  severity    String    @db.VarChar(20) // low, medium, high, critical
+  description String?   @db.Text
+  detectedAt  DateTime  @default(now())
+  status      String    @default("open") @db.VarChar(20) // open, acknowledged, assigned, resolved
+  resolvedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  classroom       Classroom               @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  acknowledgement AnomalyAcknowledgement?
+  assignment      AnomalyAssignment?
+  resolution      AnomalyResolution?
+
+  @@index([status])
+  @@index([classroomId, detectedAt])
+  @@map("anomaly_events")
+}
+
+model AnomalyAcknowledgement {
+  id             String   @id @default(uuid()) @db.VarChar(36)
+  anomalyEventId String   @unique @db.VarChar(36)
+  userId         String   @db.VarChar(36)
+  acknowledgedAt DateTime @default(now())
+
+  anomalyEvent AnomalyEvent @relation(fields: [anomalyEventId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@map("anomaly_acknowledgements")
+}
+
+model AnomalyAssignment {
+  id               String   @id @default(uuid()) @db.VarChar(36)
+  anomalyEventId   String   @unique @db.VarChar(36)
+  assignedToUserId String   @db.VarChar(36)
+  assignedByUserId String   @db.VarChar(36)
+  assignedAt       DateTime @default(now())
+
+  anomalyEvent AnomalyEvent @relation(fields: [anomalyEventId], references: [id], onDelete: Cascade)
+  assignedTo   User         @relation("AssignedTo", fields: [assignedToUserId], references: [id])
+  assignedBy   User         @relation("AssignedBy", fields: [assignedByUserId], references: [id])
+
+  @@map("anomaly_assignments")
+}
+
+model AnomalyResolution {
+  id             String   @id @default(uuid()) @db.VarChar(36)
+  anomalyEventId String   @unique @db.VarChar(36)
+  userId         String   @db.VarChar(36)
+  resolutionNote String   @db.Text // REQUIRED — cannot be empty
+  resolvedAt     DateTime @default(now())
+
+  anomalyEvent AnomalyEvent @relation(fields: [anomalyEventId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@map("anomaly_resolutions")
+}
+
+// ============================================================================
+// PARKING OPERATIONS
+// ============================================================================
+
+model ParkingFacility {
+  id          String @id @default(uuid()) @db.VarChar(36)
+  campusId    String @db.VarChar(36)
+  name        String @db.VarChar(200)
+  totalSpaces Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  campus     Campus           @relation(fields: [campusId], references: [id], onDelete: Cascade)
+  spaces     ParkingSpace[]
+  readers    ParkingReader[]
+  sessions   ParkingSession[]
+  exceptions ParkingException[]
+
+  @@map("parking_facilities")
+}
+
+model ParkingSpace {
+  id         String  @id @default(uuid()) @db.VarChar(36)
+  facilityId String  @db.VarChar(36)
+  label      String  @db.VarChar(20)
+  isActive   Boolean @default(true)
+
+  facility ParkingFacility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+
+  @@unique([facilityId, label])
+  @@map("parking_spaces")
+}
+
+model ParkingReader {
+  id         String @id @default(uuid()) @db.VarChar(36)
+  facilityId String @db.VarChar(36)
+  type       String @db.VarChar(10) // entry, exit
+  location   String @db.VarChar(200)
+
+  facility ParkingFacility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  events   ParkingEvent[]
+
+  @@map("parking_readers")
+}
+
+model ParkingEvent {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  readerId     String   @db.VarChar(36)
+  plateNumber  String?  @db.VarChar(20) // null when no plate captured
+  eventType    String   @db.VarChar(10) // entry, exit
+  capturedAt   DateTime @default(now())
+  imageAssetId String?  @db.VarChar(36)
+
+  reader        ParkingReader    @relation(fields: [readerId], references: [id], onDelete: Cascade)
+  imageAsset    FileAsset?       @relation(fields: [imageAssetId], references: [id], onDelete: SetNull)
+  entrySession  ParkingSession?  @relation("EntryEvent")
+  exitSession   ParkingSession?  @relation("ExitEvent")
+
+  @@index([plateNumber, capturedAt])
+  @@map("parking_events")
+}
+
+model ParkingSession {
+  id           String    @id @default(uuid()) @db.VarChar(36)
+  facilityId   String    @db.VarChar(36)
+  plateNumber  String    @db.VarChar(20)
+  entryEventId String    @unique @db.VarChar(36)
+  exitEventId  String?   @unique @db.VarChar(36)
+  entryAt      DateTime
+  exitAt       DateTime?
+  status       String    @default("active") @db.VarChar(20) // active, completed, exception
+
+  facility   ParkingFacility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  entryEvent ParkingEvent    @relation("EntryEvent", fields: [entryEventId], references: [id])
+  exitEvent  ParkingEvent?   @relation("ExitEvent", fields: [exitEventId], references: [id])
+  exceptions ParkingException[]
+
+  @@index([facilityId, status])
+  @@index([plateNumber, entryAt])
+  @@map("parking_sessions")
+}
+
+model ParkingException {
+  id              String    @id @default(uuid()) @db.VarChar(36)
+  facilityId      String    @db.VarChar(36)
+  type            String    @db.VarChar(30) // no_plate, overtime, unsettled, duplicate_plate, inconsistent_entry_exit
+  relatedSessionId String?  @db.VarChar(36)
+  relatedEventId  String?   @db.VarChar(36)
+  status          String    @default("open") @db.VarChar(20) // open, escalated, resolved
+  description     String?   @db.Text
+  createdAt       DateTime  @default(now())
+  escalatedAt     DateTime?
+  resolvedAt      DateTime?
+  resolutionNote  String?   @db.Text // REQUIRED for closure — enforced in application layer
+
+  facility       ParkingFacility  @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  relatedSession ParkingSession?  @relation(fields: [relatedSessionId], references: [id], onDelete: SetNull)
+  escalation     ParkingEscalation?
+
+  @@index([status, createdAt])
+  @@index([facilityId, status])
+  @@map("parking_exceptions")
+}
+
+model ParkingEscalation {
+  id              String    @id @default(uuid()) @db.VarChar(36)
+  exceptionId     String    @unique @db.VarChar(36)
+  escalatedToUserId String  @db.VarChar(36)
+  escalatedAt     DateTime  @default(now())
+  acknowledgedAt  DateTime?
+
+  exception    ParkingException @relation(fields: [exceptionId], references: [id], onDelete: Cascade)
+  escalatedTo  User             @relation(fields: [escalatedToUserId], references: [id])
+
+  @@map("parking_escalations")
+}
+
+// ============================================================================
+// LOGISTICS
+// ============================================================================
+
+model Warehouse {
+  id        String  @id @default(uuid()) @db.VarChar(36)
+  orgId     String  @db.VarChar(36)
+  name      String  @db.VarChar(200)
+  address   String? @db.VarChar(500)
+  isActive  Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  shipments    Shipment[]
+
+  @@map("warehouses")
+}
+
+model Carrier {
+  id             String  @id @default(uuid()) @db.VarChar(36)
+  orgId          String  @db.VarChar(36)
+  name           String  @db.VarChar(200)
+  connectorType  String  @db.VarChar(50) // rest_api, file_drop, manual
+  connectorConfig String? @db.Text // JSON — encrypted connection details
+  isActive       Boolean @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  shipments    Shipment[]
+  syncCursor   CarrierSyncCursor?
+
+  @@map("carriers")
+}
+
+model DeliveryZone {
+  id         String @id @default(uuid()) @db.VarChar(36)
+  orgId      String @db.VarChar(36)
+  name       String @db.VarChar(100)
+  regionCode String @db.VarChar(20)
+  zipPatterns String @db.Text // JSON array of ZIP prefix patterns
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@map("delivery_zones")
+}
+
+model NonServiceableZip {
+  id      String @id @default(uuid()) @db.VarChar(36)
+  orgId   String @db.VarChar(36)
+  zipCode String @db.VarChar(10)
+  reason  String? @db.VarChar(500)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, zipCode])
+  @@map("non_serviceable_zips")
+}
+
+model ShippingFeeTemplate {
+  id                 String  @id @default(uuid()) @db.VarChar(36)
+  orgId              String  @db.VarChar(36)
+  name               String  @db.VarChar(200)
+  baseFee            Decimal @db.Decimal(10, 2) // e.g. $6.95
+  baseWeightLb       Decimal @db.Decimal(10, 2) // e.g. 2.00 lb
+  perAdditionalLbFee Decimal @db.Decimal(10, 2) // e.g. $1.25
+  regionCode         String  @db.VarChar(20)
+  tier               String  @db.VarChar(50) // standard, express, priority
+  minItems           Int     @default(1)
+  maxItems           Int?    // null = unlimited
+  isActive           Boolean @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  surcharges   ShippingFeeSurcharge[]
+
+  @@map("shipping_fee_templates")
+}
+
+model ShippingFeeSurcharge {
+  id              String  @id @default(uuid()) @db.VarChar(36)
+  templateId      String  @db.VarChar(36)
+  condition       String  @db.VarChar(50) // alaska_hawaii, oversize, hazmat
+  surchargeAmount Decimal @db.Decimal(10, 2)
+
+  template ShippingFeeTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@map("shipping_fee_surcharges")
+}
+
+model Shipment {
+  id                 String    @id @default(uuid()) @db.VarChar(36)
+  warehouseId        String    @db.VarChar(36)
+  carrierId          String    @db.VarChar(36)
+  trackingNumber     String?   @db.VarChar(100)
+  status             String    @default("pending") @db.VarChar(30) // pending, picked, shipped, in_transit, delivered, exception
+  shippedAt          DateTime?
+  deliveredAt        DateTime?
+  estimatedDeliveryAt DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  warehouse       Warehouse        @relation(fields: [warehouseId], references: [id])
+  carrier         Carrier          @relation(fields: [carrierId], references: [id])
+  parcels         Parcel[]
+  trackingUpdates TrackingUpdate[]
+  tickets         AfterSalesTicket[]
+
+  @@index([trackingNumber])
+  @@index([status])
+  @@map("shipments")
+}
+
+model Parcel {
+  id          String  @id @default(uuid()) @db.VarChar(36)
+  shipmentId  String  @db.VarChar(36)
+  description String  @db.VarChar(500)
+  weightLb    Decimal @db.Decimal(10, 2)
+  quantity    Int     @default(1)
+  status      String  @default("pending") @db.VarChar(30)
+
+  shipment Shipment           @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  tickets  AfterSalesTicket[]
+
+  @@map("parcels")
+}
+
+model TrackingUpdate {
+  id         String   @id @default(uuid()) @db.VarChar(36)
+  shipmentId String   @db.VarChar(36)
+  status     String   @db.VarChar(50)
+  location   String?  @db.VarChar(200)
+  timestamp  DateTime
+  source     String   @db.VarChar(50) // carrier_sync, manual
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId, timestamp])
+  @@map("tracking_updates")
+}
+
+model CarrierSyncCursor {
+  id                String    @id @default(uuid()) @db.VarChar(36)
+  carrierId         String    @unique @db.VarChar(36)
+  lastSyncAt        DateTime?
+  lastSuccessCursor String?   @db.VarChar(500)
+  errorState        String?   @db.Text
+  updatedAt         DateTime  @updatedAt
+
+  carrier Carrier @relation(fields: [carrierId], references: [id], onDelete: Cascade)
+
+  @@map("carrier_sync_cursors")
+}
+
+// ============================================================================
+// AFTER-SALES
+// ============================================================================
+
+model AfterSalesTicket {
+  id               String    @id @default(uuid()) @db.VarChar(36)
+  orgId            String    @db.VarChar(36)
+  type             String    @db.VarChar(20) // delay, dispute, lost_item
+  shipmentId       String?   @db.VarChar(36)
+  parcelId         String?   @db.VarChar(36)
+  status           String    @default("open") @db.VarChar(30) // open, investigating, pending_approval, resolved, closed
+  priority         String    @default("medium") @db.VarChar(20) // low, medium, high, urgent
+  createdByUserId  String    @db.VarChar(36)
+  assignedToUserId String?   @db.VarChar(36)
+  slaDeadlineAt    DateTime?
+  resolvedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  organization    Organization            @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  shipment        Shipment?               @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  parcel          Parcel?                 @relation(fields: [parcelId], references: [id], onDelete: SetNull)
+  createdBy       User                    @relation("TicketCreatedBy", fields: [createdByUserId], references: [id])
+  assignedTo      User?                   @relation("TicketAssignedTo", fields: [assignedToUserId], references: [id])
+  timeline        TicketTimeline[]
+  evidence        EvidenceAsset[]
+  compensations   CompensationSuggestion[]
+
+  @@index([status])
+  @@index([orgId, createdAt])
+  @@index([assignedToUserId, status])
+  @@map("after_sales_tickets")
+}
+
+model TicketTimeline {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  ticketId  String   @db.VarChar(36)
+  entryType String   @db.VarChar(50) // created, assigned, note, status_change, compensation, evidence_added, resolved
+  content   String   @db.Text
+  userId    String   @db.VarChar(36)
+  createdAt DateTime @default(now())
+
+  ticket AfterSalesTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User             @relation(fields: [userId], references: [id])
+
+  @@index([ticketId, createdAt])
+  @@map("ticket_timelines")
+}
+
+model EvidenceAsset {
+  id              String   @id @default(uuid()) @db.VarChar(36)
+  ticketId        String   @db.VarChar(36)
+  fileAssetId     String   @db.VarChar(36)
+  description     String?  @db.VarChar(500)
+  uploadedByUserId String  @db.VarChar(36)
+  uploadedAt      DateTime @default(now())
+
+  ticket    AfterSalesTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  fileAsset FileAsset        @relation(fields: [fileAssetId], references: [id])
+  user      User             @relation(fields: [uploadedByUserId], references: [id])
+
+  @@map("evidence_assets")
+}
+
+model CompensationPolicy {
+  id                 String  @id @default(uuid()) @db.VarChar(36)
+  orgId              String  @db.VarChar(36)
+  triggerType        String  @db.VarChar(50) // delivery_late_48h, lost_item, damaged_item
+  compensationAmount Decimal @db.Decimal(10, 2) // e.g. $10.00
+  maxCapPerTicket    Decimal @db.Decimal(10, 2) // e.g. $50.00
+  isActive           Boolean @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization             @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  suggestions  CompensationSuggestion[]
+
+  @@map("compensation_policies")
+}
+
+model CompensationSuggestion {
+  id              String  @id @default(uuid()) @db.VarChar(36)
+  ticketId        String  @db.VarChar(36)
+  policyId        String  @db.VarChar(36)
+  suggestedAmount Decimal @db.Decimal(10, 2)
+  reason          String  @db.Text
+  status          String  @default("pending") @db.VarChar(20) // pending, approved, rejected
+
+  ticket   AfterSalesTicket     @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  policy   CompensationPolicy   @relation(fields: [policyId], references: [id])
+  approval CompensationApproval?
+
+  @@map("compensation_suggestions")
+}
+
+model CompensationApproval {
+  id               String   @id @default(uuid()) @db.VarChar(36)
+  suggestionId     String   @unique @db.VarChar(36)
+  approvedByUserId String   @db.VarChar(36)
+  decision         String   @db.VarChar(20) // approved, rejected
+  notes            String?  @db.Text
+  decidedAt        DateTime @default(now())
+
+  suggestion CompensationSuggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+  user       User                   @relation(fields: [approvedByUserId], references: [id])
+
+  @@map("compensation_approvals")
+}
+
+// ============================================================================
+// MEMBERSHIPS
+// ============================================================================
+
+model MembershipTier {
+  id              String  @id @default(uuid()) @db.VarChar(36)
+  orgId           String  @db.VarChar(36)
+  name            String  @db.VarChar(100)
+  level           Int     // 1 = base, 2, 3, etc.
+  pointsThreshold Int     // points needed to reach this tier
+  benefits        String  @db.Text // JSON: list of benefit descriptions
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization   Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  members        Member[]
+  coupons        Coupon[]
+  pricingRules   MemberPricingRule[]
+
+  @@unique([orgId, level])
+  @@map("membership_tiers")
+}
+
+model Member {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  orgId        String   @db.VarChar(36)
+  userId       String?  @db.VarChar(36)
+  studentId    String?  @db.VarChar(36)
+  tierId       String   @db.VarChar(36)
+  growthPoints Int      @default(0)
+  joinedAt     DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  organization        Organization            @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  student             Student?                @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  tier                MembershipTier          @relation(fields: [tierId], references: [id])
+  pointTransactions   GrowthPointTransaction[]
+  couponRedemptions   CouponRedemption[]
+  wallet              StoredValueWallet?
+  fulfillmentRequests FulfillmentRequest[]
+
+  @@map("members")
+}
+
+model GrowthPointTransaction {
+  id            String   @id @default(uuid()) @db.VarChar(36)
+  memberId      String   @db.VarChar(36)
+  points        Int      // positive = earn, negative = redeem
+  reason        String   @db.VarChar(200)
+  referenceType String?  @db.VarChar(50) // fulfillment_request, manual_adjustment
+  referenceId   String?  @db.VarChar(36)
+  createdAt     DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId, createdAt])
+  @@map("growth_point_transactions")
+}
+
+model Coupon {
+  id                String    @id @default(uuid()) @db.VarChar(36)
+  orgId             String    @db.VarChar(36)
+  code              String    @db.VarChar(50)
+  discountType      String    @db.VarChar(20) // percentage, fixed_amount
+  discountValue     Decimal   @db.Decimal(10, 2)
+  minOrderAmount    Decimal?  @db.Decimal(10, 2)
+  tierId            String?   @db.VarChar(36) // null = all tiers
+  expiresAt         DateTime?
+  maxRedemptions    Int?
+  currentRedemptions Int      @default(0)
+  isActive          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organization Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  tier         MembershipTier?    @relation(fields: [tierId], references: [id], onDelete: SetNull)
+  redemptions  CouponRedemption[]
+
+  @@unique([orgId, code])
+  @@map("coupons")
+}
+
+model CouponRedemption {
+  id                   String   @id @default(uuid()) @db.VarChar(36)
+  couponId             String   @db.VarChar(36)
+  memberId             String   @db.VarChar(36)
+  fulfillmentRequestId String?  @db.VarChar(36)
+  redeemedAt           DateTime @default(now())
+
+  coupon             Coupon              @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  member             Member              @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  fulfillmentRequest FulfillmentRequest? @relation(fields: [fulfillmentRequestId], references: [id], onDelete: SetNull)
+
+  @@map("coupon_redemptions")
+}
+
+model MemberPricingRule {
+  id              String  @id @default(uuid()) @db.VarChar(36)
+  orgId           String  @db.VarChar(36)
+  tierId          String  @db.VarChar(36)
+  itemCategory    String  @db.VarChar(100)
+  discountPercent Decimal @db.Decimal(5, 2)
+  isActive        Boolean @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  tier         MembershipTier @relation(fields: [tierId], references: [id], onDelete: Cascade)
+
+  @@map("member_pricing_rules")
+}
+
+model StoredValueWallet {
+  id               String   @id @default(uuid()) @db.VarChar(36)
+  memberId         String   @unique @db.VarChar(36)
+  encryptedBalance String   @db.Text // AES-256 encrypted — encryption impl deferred
+  isEnabled        Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  member        Member              @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  ledgerEntries WalletLedgerEntry[]
+
+  @@map("stored_value_wallets")
+}
+
+model WalletLedgerEntry {
+  id            String   @id @default(uuid()) @db.VarChar(36)
+  walletId      String   @db.VarChar(36)
+  entryType     String   @db.VarChar(20) // topup, spend, refund
+  amount        Decimal  @db.Decimal(10, 2) // always positive
+  referenceType String?  @db.VarChar(50) // fulfillment_request, manual_topup, compensation
+  referenceId   String?  @db.VarChar(36)
+  balanceBefore Decimal  @db.Decimal(10, 2)
+  balanceAfter  Decimal  @db.Decimal(10, 2)
+  createdAt     DateTime @default(now())
+  // No updatedAt — append-only ledger
+
+  wallet   StoredValueWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  receipts PrintableReceipt[]
+
+  @@index([walletId, createdAt])
+  @@map("wallet_ledger_entries")
+}
+
+model FulfillmentRequest {
+  id             String   @id @default(uuid()) @db.VarChar(36)
+  orgId          String   @db.VarChar(36)
+  memberId       String?  @db.VarChar(36)
+  status         String   @default("draft") @db.VarChar(30) // draft, submitted, processing, completed, cancelled
+  totalAmount    Decimal  @db.Decimal(10, 2)
+  shippingFee    Decimal  @default(0) @db.Decimal(10, 2)
+  discountAmount Decimal  @default(0) @db.Decimal(10, 2)
+  finalAmount    Decimal  @db.Decimal(10, 2)
+  idempotencyKey String   @db.VarChar(64)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization     Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  member           Member?            @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  lineItems        FulfillmentLineItem[]
+  couponRedemptions CouponRedemption[]
+  receipts         PrintableReceipt[]
+
+  @@unique([orgId, idempotencyKey])
+  @@index([orgId, createdAt])
+  @@map("fulfillment_requests")
+}
+
+model FulfillmentLineItem {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  requestId   String   @db.VarChar(36)
+  description String   @db.VarChar(500)
+  unitPrice   Decimal  @db.Decimal(10, 2)
+  quantity    Int      @default(1)
+  memberPrice Decimal? @db.Decimal(10, 2) // null if no member pricing applied
+
+  request FulfillmentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@map("fulfillment_line_items")
+}
+
+model PrintableReceipt {
+  id                   String   @id @default(uuid()) @db.VarChar(36)
+  fulfillmentRequestId String?  @db.VarChar(36)
+  walletLedgerEntryId  String?  @db.VarChar(36)
+  receiptNumber        String   @unique @db.VarChar(50)
+  generatedAt          DateTime @default(now())
+  fileAssetId          String?  @db.VarChar(36)
+
+  fulfillmentRequest FulfillmentRequest? @relation(fields: [fulfillmentRequestId], references: [id], onDelete: SetNull)
+  walletLedgerEntry  WalletLedgerEntry?  @relation(fields: [walletLedgerEntryId], references: [id], onDelete: SetNull)
+  fileAsset          FileAsset?          @relation(fields: [fileAssetId], references: [id], onDelete: SetNull)
+
+  @@map("printable_receipts")
+}
+
+// ============================================================================
+// OBSERVABILITY
+// ============================================================================
+
+model RuntimeMetric {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  metricName  String   @db.VarChar(100) // p95_latency, cpu_utilization, gpu_utilization, error_rate
+  value       Float
+  unit        String   @db.VarChar(20) // ms, percent, count
+  collectedAt DateTime @default(now())
+  orgId       String?  @db.VarChar(36) // null = platform-wide metric
+
+  @@index([metricName, collectedAt])
+  @@index([orgId, metricName, collectedAt])
+  @@map("runtime_metrics")
+}
+
+model ApplicationLog {
+  id            String   @id @default(uuid()) @db.VarChar(36)
+  level         String   @db.VarChar(10) // debug, info, warn, error
+  message       String   @db.Text        // AES-256-GCM encrypted
+  messageSearch String?  @db.VarChar(500) // plaintext truncation for search (first 500 chars)
+  context       String?  @db.Text        // AES-256-GCM encrypted JSON metadata
+  timestamp     DateTime @default(now())
+  orgId         String?  @db.VarChar(36) // null = platform-wide log
+
+  // 30-day retention enforced by background job
+  @@index([timestamp])
+  @@index([level, timestamp])
+  @@index([orgId, timestamp])
+  @@map("application_logs")
+}
+
+model AlertThreshold {
+  id             String  @id @default(uuid()) @db.VarChar(36)
+  metricName     String  @db.VarChar(100)
+  operator       String  @db.VarChar(10) // gt, gte, lt, lte, eq
+  thresholdValue Float
+  isActive       Boolean @default(true)
+  orgId          String? @db.VarChar(36) // null = platform-wide threshold
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  alerts AlertEvent[]
+
+  @@index([orgId])
+  @@map("alert_thresholds")
+}
+
+model AlertEvent {
+  id                  String    @id @default(uuid()) @db.VarChar(36)
+  thresholdId         String    @db.VarChar(36)
+  metricValue         Float
+  triggeredAt         DateTime  @default(now())
+  acknowledgedAt      DateTime?
+  acknowledgedByUserId String?  @db.VarChar(36)
+  orgId               String?   @db.VarChar(36) // null = platform-wide alert
+
+  threshold    AlertThreshold @relation(fields: [thresholdId], references: [id], onDelete: Cascade)
+  acknowledgedBy User?        @relation(fields: [acknowledgedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([triggeredAt])
+  @@index([orgId])
+  @@map("alert_events")
+}
+
+model NotificationEvent {
+  id           String    @id @default(uuid()) @db.VarChar(36)
+  alertEventId String?   @db.VarChar(36)
+  type         String    @db.VarChar(20) // banner, audible
+  message      String    @db.Text
+  targetRoleId String?   @db.VarChar(36)
+  orgId        String?   @db.VarChar(36) // null = broadcast to all orgs
+  createdAt    DateTime  @default(now())
+  readAt       DateTime?
+
+  targetRole Role? @relation(fields: [targetRoleId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([orgId])
+  @@map("notification_events")
+}
+
+// ============================================================================
+// JOBS & FILES
+// ============================================================================
+
+model ImportJob {
+  id                 String    @id @default(uuid()) @db.VarChar(36)
+  entityType         String    @db.VarChar(50) // students, classes, departments, courses
+  fileName           String    @db.VarChar(500)
+  status             String    @default("pending") @db.VarChar(30) // pending, processing, partial_success, success, failed
+  totalRows          Int       @default(0)
+  successRows        Int       @default(0)
+  failedRows         Int       @default(0)
+  errorReportAssetId String?   @db.VarChar(36)
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdByUserId    String    @db.VarChar(36)
+  createdAt          DateTime  @default(now())
+
+  createdBy    User           @relation(fields: [createdByUserId], references: [id])
+  errorReport  FileAsset?     @relation("ImportErrorReport", fields: [errorReportAssetId], references: [id], onDelete: SetNull)
+  rowErrors    ImportRowError[]
+
+  @@index([status])
+  @@map("import_jobs")
+}
+
+model ImportRowError {
+  id          String @id @default(uuid()) @db.VarChar(36)
+  importJobId String @db.VarChar(36)
+  rowNumber   Int
+  field       String @db.VarChar(100)
+  errorMessage String @db.VarChar(500)
+  rawValue    String? @db.Text
+
+  importJob ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+
+  @@index([importJobId])
+  @@map("import_row_errors")
+}
+
+model ExportJob {
+  id              String    @id @default(uuid()) @db.VarChar(36)
+  entityType      String    @db.VarChar(50)
+  format          String    @db.VarChar(10) // xlsx, csv
+  status          String    @default("pending") @db.VarChar(30) // pending, processing, completed, failed
+  fileAssetId     String?   @db.VarChar(36)
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdByUserId String    @db.VarChar(36)
+  createdAt       DateTime  @default(now())
+
+  createdBy User      @relation(fields: [createdByUserId], references: [id])
+  fileAsset FileAsset? @relation("ExportFile", fields: [fileAssetId], references: [id], onDelete: SetNull)
+
+  @@map("export_jobs")
+}
+
+model BackgroundJob {
+  id          String    @id @default(uuid()) @db.VarChar(36)
+  type        String    @db.VarChar(100) // import, export, carrier_sync, backup, log_retention, escalation_check
+  payload     String?   @db.Text // JSON
+  status      String    @default("pending") @db.VarChar(20) // pending, running, completed, failed
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  lastError   String?   @db.Text
+  scheduledAt DateTime  @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([status, scheduledAt])
+  @@index([type, status])
+  @@map("background_jobs")
+}
+
+model FileAsset {
+  id             String   @id @default(uuid()) @db.VarChar(36)
+  originalName   String   @db.VarChar(500)
+  storagePath    String   @db.VarChar(1000)
+  mimeType       String   @db.VarChar(50) // image/jpeg, image/png, application/pdf, etc.
+  sizeBytes      Int
+  width          Int?     // for images only
+  height         Int?     // for images only
+  perceptualHash String?  @db.VarChar(64) // for duplicate detection
+  uploadedByUserId String @db.VarChar(36)
+  createdAt      DateTime @default(now())
+
+  uploadedBy       User              @relation(fields: [uploadedByUserId], references: [id])
+  parkingEvents    ParkingEvent[]
+  evidenceAssets   EvidenceAsset[]
+  importErrorReports ImportJob[]     @relation("ImportErrorReport")
+  exportFiles      ExportJob[]      @relation("ExportFile")
+  receipts         PrintableReceipt[]
+  perceptualHashes PerceptualHash[]
+
+  @@index([perceptualHash])
+  @@map("file_assets")
+}
+
+model PerceptualHash {
+  id          String @id @default(uuid()) @db.VarChar(36)
+  fileAssetId String @db.VarChar(36)
+  hashValue   String @db.VarChar(64)
+  algorithm   String @db.VarChar(20) // phash, dhash
+
+  fileAsset FileAsset @relation(fields: [fileAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([fileAssetId, algorithm])
+  @@index([hashValue])
+  @@map("perceptual_hashes")
+}
+
+// ============================================================================
+// BACKUP & RESTORE
+// ============================================================================
+
+model BackupRecord {
+  id          String    @id @default(uuid()) @db.VarChar(36)
+  type        String    @default("full") @db.VarChar(20) // full
+  storagePath String    @db.VarChar(1000)
+  sizeBytes   BigInt?
+  status      String    @default("running") @db.VarChar(20) // running, completed, failed
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  expiresAt   DateTime  // 14-day retention
+
+  restoreRuns RestoreRun[]
+
+  @@index([expiresAt])
+  @@index([status])
+  @@map("backup_records")
+}
+
+model RestoreRun {
+  id                 String    @id @default(uuid()) @db.VarChar(36)
+  backupId           String    @db.VarChar(36)
+  status             String    @default("running") @db.VarChar(20) // running, completed, failed
+  verificationResult String?   @db.Text // JSON summary of verification checks
+  performedByUserId  String    @db.VarChar(36)
+  startedAt          DateTime  @default(now())
+  completedAt        DateTime?
+
+  backup      BackupRecord @relation(fields: [backupId], references: [id], onDelete: Cascade)
+  performedBy User         @relation(fields: [performedByUserId], references: [id])
+
+  @@map("restore_runs")
+}
+
+// ============================================================================
+// IDEMPOTENCY
+// ============================================================================
+
+model IdempotencyRecord {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  scope        String   @db.VarChar(128)
+  key          String   @db.VarChar(64)
+  method       String   @db.VarChar(10)
+  path         String   @db.VarChar(500)
+  statusCode   Int
+  responseBody String   @db.Text
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@unique([scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_records")
+}
