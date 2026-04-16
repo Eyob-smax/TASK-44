@@ -1,7 +1,36 @@
 services:
+  cert-init:
+    image: alpine:3.20
+    restart: 'no'
+    volumes:
+      - ${CERT_PATH:-./certs}:/certs
+    command:
+      - sh
+      - -lc
+      - |
+        set -eu
+        apk add --no-cache openssl >/dev/null
+        mkdir -p /certs
+        if [ -f /certs/server.crt ] && [ -f /certs/server.key ]; then
+          cert_mod="$$(openssl x509 -noout -modulus -in /certs/server.crt 2>/dev/null | openssl md5 || true)"
+          key_mod="$$(openssl rsa -noout -modulus -in /certs/server.key 2>/dev/null | openssl md5 || true)"
+          if [ -n "$$cert_mod" ] && [ "$$cert_mod" = "$$key_mod" ]; then
+            echo "TLS cert/key already present and valid in /certs"
+            exit 0
+          fi
+          echo "TLS cert/key exist but are invalid or mismatched; regenerating"
+        fi
+        echo "Generating self-signed TLS cert/key in /certs"
+        openssl req -x509 -newkey rsa:4096 \
+          -keyout /certs/server.key \
+          -out /certs/server.crt \
+          -days 3650 \
+          -nodes \
+          -subj "/CN=campusops-lan"
+
   mysql:
     image: mysql:8.0
-    container_name: campusops-mysql
+    command: --default-authentication-plugin=mysql_native_password
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-campusops_root}
@@ -21,7 +50,6 @@ services:
 
   db-seed:
     image: mysql:8.0
-    container_name: campusops-db-seed
     restart: 'no'
     depends_on:
       mysql:
@@ -37,6 +65,19 @@ services:
       - -lc
       - |
         set -eu
+        mysql_ready=0
+        for i in $(seq 1 60); do
+          if mysqladmin ping -h mysql -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD" --silent >/dev/null 2>&1; then
+            mysql_ready=1
+            break
+          fi
+          sleep 2
+        done
+        if [ "$$mysql_ready" -ne 1 ]; then
+          echo "MySQL was not reachable for db-seed" >&2
+          exit 1
+        fi
+
         ready=0
         for i in $(seq 1 60); do
           if mysql -h mysql -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD" "$$MYSQL_DATABASE" -Nse "SHOW TABLES LIKE 'roles'" | grep -q '^roles$$'; then
@@ -56,18 +97,22 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: campusops-backend
     restart: unless-stopped
     depends_on:
+      cert-init:
+        condition: service_completed_successfully
       mysql:
         condition: service_healthy
     environment:
       NODE_ENV: production
+      MYSQL_USER: ${MYSQL_USER:-campusops}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-campusops_pass}
       DATABASE_URL: mysql://${MYSQL_USER:-campusops}:${MYSQL_PASSWORD:-campusops_pass}@mysql:3306/${MYSQL_DATABASE:-campusops}
       PORT: 4000
-      JWT_SECRET: ${JWT_SECRET}
-      INTEGRATION_SIGNING_SECRET: ${INTEGRATION_SIGNING_SECRET}
-      AES_KEY: ${AES_KEY}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-please-override-in-production-0123456789abcdef}
+      INTEGRATION_SIGNING_SECRET: ${INTEGRATION_SIGNING_SECRET:-dev-integration-secret-please-override-0123456789}
+      AES_KEY: ${AES_KEY:-a0a1a2a3a4a5a6a7a8a9b0b1b2b3b4b5a0a1a2a3a4a5a6a7a8a9b0b1b2b3b4b5}
+      PRISMA_FORCE_RESET_ON_PUSH_FAILURE: ${PRISMA_FORCE_RESET_ON_PUSH_FAILURE:-true}
       STORAGE_PATH: /data/object-storage
       BACKUP_PATH: /data/backups
       TLS_CERT_PATH: /certs/server.crt
@@ -78,15 +123,59 @@ services:
       - object-storage:/data/object-storage
       - backup-storage:/data/backups
       - ${CERT_PATH:-./certs}:/certs:ro
+    command:
+      - sh
+      - -lc
+      - |
+        set -e
+        apk add --no-cache netcat-openbsd >/dev/null
+        echo "[backend] waiting for MySQL to accept connections..."
+        ready=0
+        for i in $(seq 1 90); do
+          if nc -z mysql 3306 >/dev/null 2>&1; then
+            ready=1
+            break
+          fi
+          sleep 2
+        done
+        if [ "$$ready" -ne 1 ]; then
+          echo "[backend] MySQL did not become reachable in time"
+          exit 1
+        fi
+
+        echo "[backend] syncing Prisma schema..."
+        if ! npx prisma db push --skip-generate; then
+          if [ "$${PRISMA_FORCE_RESET_ON_PUSH_FAILURE:-false}" = "true" ]; then
+            echo "[backend] prisma db push failed; forcing reset to recover local dev schema"
+            npx prisma db push --force-reset --skip-generate --accept-data-loss
+          else
+            echo "[backend] prisma db push failed and auto reset is disabled"
+            exit 1
+          fi
+        fi
+
+        echo "[backend] repairing legacy zero-date values in users.updatedAt..."
+        printf "%s\n" \
+          "SET SESSION sql_mode='';" \
+          "UPDATE users SET updatedAt = COALESCE(createdAt, NOW()) WHERE CAST(updatedAt AS CHAR) LIKE '0000-00-00%';" \
+          "UPDATE roles SET updatedAt = COALESCE(createdAt, NOW()) WHERE CAST(updatedAt AS CHAR) LIKE '0000-00-00%';" \
+          "UPDATE organizations SET updatedAt = COALESCE(createdAt, NOW()) WHERE CAST(updatedAt AS CHAR) LIKE '0000-00-00%';" \
+          | npx prisma db execute --stdin --schema prisma/schema.prisma \
+          || true
+
+        echo "[backend] starting application"
+        node dist/index.js
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: campusops-frontend
     restart: unless-stopped
     depends_on:
-      - backend
+      cert-init:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
     ports:
       - '443:443'
     volumes:

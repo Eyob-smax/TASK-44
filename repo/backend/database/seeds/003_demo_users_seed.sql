@@ -15,7 +15,7 @@ INSERT IGNORE INTO organizations (id, name, type, timezone)
 VALUES ('00000000-0000-0000-0000-000000000111', 'CampusOps Demo Organization', 'district', 'UTC');
 
 -- Bcrypt hash for the password "password"
-SET @demo_password_hash = '$2a$10$7EqJtq98hPqEX7fNZaFWoOq6.7M3aMcMBXNIN1qNbfXDnpa9eKJe.';
+SET @demo_password_hash = '$2a$10$NnVpH8/dn/5A9GJFzMqcc.WXO2BbtlqOnZevq8g0sT2XDZb6OOO4G';
 
 INSERT IGNORE INTO users (id, username, passwordHash, salt, displayName, isActive, orgId) VALUES
   ('user-demo-admin',      'demo.admin',      @demo_password_hash, 'demo-seed', 'Demo Administrator', TRUE, '00000000-0000-0000-0000-000000000111'),

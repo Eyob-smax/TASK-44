@@ -242,10 +242,17 @@ Copy-Item .env.example .env
 ```
 
 Required environment variables (see `.env.example` for the full reference):
-- `DATABASE_URL`, `JWT_SECRET`, `INTEGRATION_SIGNING_SECRET`, `AES_KEY` — must be set before starting
+- `DATABASE_URL`, `JWT_SECRET`, `INTEGRATION_SIGNING_SECRET`, `AES_KEY`
 - `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` — MySQL service credentials
 
-TLS (required for LAN use): place `server.crt` and `server.key` in a local `certs/` directory (or the path set by `CERT_PATH`). The `docker-compose.yml` mounts `${CERT_PATH:-./certs}` read-only into the nginx container at `/certs`. To generate a self-signed certificate for LAN use:
+For local Docker runs, `docker-compose.yml` includes safe non-empty fallback values
+for `JWT_SECRET`, `INTEGRATION_SIGNING_SECRET`, and `AES_KEY` so the backend can
+start on a clean checkout. Always override these defaults in real deployments.
+
+TLS (required for LAN use): the Compose `cert-init` service ensures `server.crt`
+and `server.key` exist under `${CERT_PATH:-./certs}` before backend/frontend
+startup. If files already exist, they are reused. To pre-generate your own
+self-signed certificate for LAN use:
 ```bash
 mkdir -p ./certs
 openssl req -x509 -newkey rsa:4096 -keyout certs/server.key -out certs/server.crt \
@@ -314,6 +321,43 @@ Expected:
 - Login succeeds.
 - Navigation and visible modules change by role (for example, Viewer is read-only and cannot perform write actions).
 
+## Troubleshooting Restart Loops
+
+If `docker compose up --build` shows repeated frontend/backend restarts:
+
+- Frontend TLS error (`SSL_CTX_use_PrivateKey ... key values mismatch`):
+        - The Compose `cert-init` service now validates cert/key modulus and regenerates
+                `server.crt` + `server.key` when they are invalid or mismatched.
+
+- Backend Prisma error (`Incorrect datetime value: '0000-00-00 00:00:00.000'`):
+        - The Compose backend startup now retries schema sync with
+                `prisma db push --force-reset` when initial `db push` fails.
+        - This local recovery behavior is controlled by
+                `PRISMA_FORCE_RESET_ON_PUSH_FAILURE` (default: `true`).
+
+If you want a fully clean local reset, run:
+
+```bash
+docker compose down -v --remove-orphans
+docker compose up --build
+```
+
 ## questions.md
 
 Blocker-level architectural ambiguities are documented in `../questions.md` at the project root.
+
+## Codespaces Access Notes
+
+When running in GitHub Codespaces, open the forwarded port `443` URL from the
+Ports panel (for example: `https://<codespace-name>-443.app.github.dev`).
+
+If you see a 502 in Codespaces, check service health first:
+
+```bash
+docker compose ps
+docker compose logs --tail=120 backend frontend mysql
+```
+
+Expected healthy state:
+- `backend` is `Up` and logs include `CampusOps backend listening with HTTPS on port 4000`
+- `frontend` is `Up` and serves `GET /login` with HTTP 200

@@ -18,7 +18,7 @@ PROJECT_NAME="${COMPOSE_PROJECT_NAME:-campusops-test-runner}"
 FRONTEND_TEST_IMAGE="${FRONTEND_TEST_IMAGE:-node:18-alpine}"
 BACKEND_TEST_IMAGE="${BACKEND_TEST_IMAGE:-node:18}"
 BACKEND_INT_TEST_IMAGE="${BACKEND_INT_TEST_IMAGE:-node:18}"
-FRONTEND_E2E_TEST_IMAGE="${FRONTEND_E2E_TEST_IMAGE:-mcr.microsoft.com/playwright:v1.53.0-jammy}"
+FRONTEND_E2E_TEST_IMAGE="${FRONTEND_E2E_TEST_IMAGE:-mcr.microsoft.com/playwright:v1.59.1-jammy}"
 
 MYSQL_DATABASE="${MYSQL_DATABASE:-campusops}"
 MYSQL_USER="${MYSQL_USER:-campusops}"
@@ -200,7 +200,9 @@ run_frontend_tests() {
 wait_for_frontend_ready() {
   local attempts=45
   while [[ "$attempts" -gt 0 ]]; do
-    if docker_cmd run --rm curlimages/curl:8.7.1 -ksSf https://host.docker.internal/login >/dev/null 2>&1; then
+    if docker_cmd run --rm \
+      --add-host=host.docker.internal:host-gateway \
+      curlimages/curl:8.7.1 -ksSf https://host.docker.internal/login >/dev/null 2>&1; then
       return 0
     fi
     attempts=$((attempts - 1))
@@ -218,6 +220,7 @@ run_frontend_e2e_tests() {
   wait_for_frontend_ready || return 1
 
   docker_cmd run --rm \
+    --add-host=host.docker.internal:host-gateway \
     --mount type=volume,source="$NPM_CACHE_VOLUME",target=/root/.npm \
     --mount type=bind,source="$FRONTEND_SRC",target=/src,readonly \
     -e E2E_BASE_URL="https://host.docker.internal" \
@@ -307,7 +310,7 @@ run_backend_integration_tests() {
     -e NODE_ENV="test" \
     --mount type=bind,source="$BACKEND_SRC",target=/src,readonly \
     "$BACKEND_INT_TEST_IMAGE" \
-      sh -lc "set -e; echo '[backend-int] preparing workspace...'; mkdir -p /work; cp -a /src/. /work; cd /work; echo '[backend-int] installing dependencies (with retries for transient Prisma engine download failures)...'; (npm ci --no-audit --no-fund --loglevel=info || (echo '[backend-int] npm ci failed, retrying in 5s...' && sleep 5 && rm -rf node_modules && npm ci --no-audit --no-fund --loglevel=info) || (echo '[backend-int] npm ci failed again, final retry in 10s...' && sleep 10 && rm -rf node_modules && npm ci --no-audit --no-fund --loglevel=info)); echo '[backend-int] ensuring MySQL client tools are available...'; if ! command -v mysqldump >/dev/null 2>&1 || ! command -v mysql >/dev/null 2>&1; then if command -v apt-get >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends default-mysql-client >/dev/null; elif command -v apk >/dev/null 2>&1; then apk add --no-cache mysql-client >/dev/null; else echo 'No supported package manager found to install MySQL client tools'; exit 1; fi; fi; echo '[backend-int] generating Prisma client...'; npx prisma generate; echo '[backend-int] syncing prisma schema...'; npx prisma db push --skip-generate --accept-data-loss; echo '[backend-int] ensuring prisma migration metadata table exists for restore verification...'; npx prisma db execute --file /work/prisma/test-bootstrap.sql --schema /work/prisma/schema.prisma; echo '[backend-int] running non-destructive integration tests...'; npx vitest run --coverage --coverage.thresholds.statements=0 --coverage.thresholds.branches=0 --coverage.thresholds.functions=0 --coverage.thresholds.lines=0 --coverage.reporter=json-summary --reporter=verbose --pool forks api_tests/integration --exclude api_tests/integration/backup-restore.integration.test.ts; echo '[backend-int] running destructive backup/restore integration test in isolation...'; npx vitest run --reporter=verbose api_tests/integration/backup-restore.integration.test.ts; if [ -f ./coverage/coverage-summary.json ]; then node -e 'const fs=require(\"fs\");const p=\"./coverage/coverage-summary.json\";const t=JSON.parse(fs.readFileSync(p,\"utf8\")).total;console.log(\"[coverage-totals] statements=\"+t.statements.covered+\"/\"+t.statements.total+\" branches=\"+t.branches.covered+\"/\"+t.branches.total+\" functions=\"+t.functions.covered+\"/\"+t.functions.total+\" lines=\"+t.lines.covered+\"/\"+t.lines.total);'; fi"
+      sh -lc "set -e; echo '[backend-int] preparing workspace...'; mkdir -p /work; cp -a /src/. /work; cd /work; echo '[backend-int] installing dependencies (with retries for transient Prisma engine download failures)...'; (npm ci --no-audit --no-fund --loglevel=info || (echo '[backend-int] npm ci failed, retrying in 5s...' && sleep 5 && rm -rf node_modules && npm ci --no-audit --no-fund --loglevel=info) || (echo '[backend-int] npm ci failed again, final retry in 10s...' && sleep 10 && rm -rf node_modules && npm ci --no-audit --no-fund --loglevel=info)); echo '[backend-int] ensuring MySQL client tools are available...'; if ! command -v mysqldump >/dev/null 2>&1 || ! command -v mysql >/dev/null 2>&1; then if command -v apt-get >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends default-mysql-client >/dev/null; elif command -v apk >/dev/null 2>&1; then apk add --no-cache mysql-client >/dev/null; else echo 'No supported package manager found to install MySQL client tools'; exit 1; fi; fi; echo '[backend-int] generating Prisma client...'; npx prisma generate; echo '[backend-int] resetting and syncing prisma schema...'; npx prisma db push --force-reset --skip-generate --accept-data-loss; echo '[backend-int] ensuring prisma migration metadata table exists for restore verification...'; npx prisma db execute --file /work/prisma/test-bootstrap.sql --schema /work/prisma/schema.prisma; echo '[backend-int] running non-destructive integration tests...'; npx vitest run --coverage --coverage.thresholds.statements=0 --coverage.thresholds.branches=0 --coverage.thresholds.functions=0 --coverage.thresholds.lines=0 --coverage.reporter=json-summary --reporter=verbose --pool forks api_tests/integration --exclude api_tests/integration/backup-restore.integration.test.ts; echo '[backend-int] running destructive backup/restore integration test in isolation...'; npx vitest run --reporter=verbose api_tests/integration/backup-restore.integration.test.ts; if [ -f ./coverage/coverage-summary.json ]; then node -e 'const fs=require(\"fs\");const p=\"./coverage/coverage-summary.json\";const t=JSON.parse(fs.readFileSync(p,\"utf8\")).total;console.log(\"[coverage-totals] statements=\"+t.statements.covered+\"/\"+t.statements.total+\" branches=\"+t.branches.covered+\"/\"+t.branches.total+\" functions=\"+t.functions.covered+\"/\"+t.functions.total+\" lines=\"+t.lines.covered+\"/\"+t.lines.total);'; fi"
 }
 
 echo ""
