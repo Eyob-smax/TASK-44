@@ -37,8 +37,20 @@ services:
       - -lc
       - |
         set -eu
-        mysql -h mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" < /seeds/001_rbac_seed.sql
-        mysql -h mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" < /seeds/003_demo_users_seed.sql
+        ready=0
+        for i in $(seq 1 60); do
+          if mysql -h mysql -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD" "$$MYSQL_DATABASE" -Nse "SHOW TABLES LIKE 'roles'" | grep -q '^roles$$'; then
+            ready=1
+            break
+          fi
+          sleep 2
+        done
+        if [ "$$ready" -ne 1 ]; then
+          echo "Database schema is not ready for seeding" >&2
+          exit 1
+        fi
+        mysql -h mysql -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD" "$$MYSQL_DATABASE" < /seeds/001_rbac_seed.sql
+        mysql -h mysql -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD" "$$MYSQL_DATABASE" < /seeds/003_demo_users_seed.sql
 
   backend:
     build:
@@ -49,8 +61,6 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-      db-seed:
-        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       DATABASE_URL: mysql://${MYSQL_USER:-campusops}:${MYSQL_PASSWORD:-campusops_pass}@mysql:3306/${MYSQL_DATABASE:-campusops}

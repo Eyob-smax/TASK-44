@@ -7,7 +7,7 @@
 -- ROLES
 -- ============================================================================
 
-INSERT IGNORE INTO roles (id, name, description, is_system) VALUES
+INSERT IGNORE INTO roles (id, name, description, isSystem) VALUES
   ('role-administrator',          'Administrator',          'Full platform access — all modules and admin operations', TRUE),
   ('role-opsmanager',             'OpsManager',             'Day-to-day operations across logistics, after-sales, memberships, and parking', TRUE),
   ('role-classroom-supervisor',   'ClassroomSupervisor',    'Classroom anomaly lifecycle and campus monitoring', TRUE),
@@ -68,7 +68,7 @@ INSERT IGNORE INTO permissions (id, action, resource, scope) VALUES
 -- ============================================================================
 
 -- Administrator: all permissions
-INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES
+INSERT IGNORE INTO role_permissions (id, roleId, permissionId) VALUES
   ('rp-admin-read-auth',               'role-administrator', 'perm-read-auth'),
   ('rp-admin-create-users',            'role-administrator', 'perm-create-users'),
   ('rp-admin-read-master-data',        'role-administrator', 'perm-read-master-data'),
@@ -93,7 +93,7 @@ INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES
   ('rp-admin-restore-backups',         'role-administrator', 'perm-restore-backups');
 
 -- OpsManager: read/write operations (no user management, no restore)
-INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES
+INSERT IGNORE INTO role_permissions (id, roleId, permissionId) VALUES
   ('rp-ops-read-auth',               'role-opsmanager', 'perm-read-auth'),
   ('rp-ops-read-master-data',        'role-opsmanager', 'perm-read-master-data'),
   ('rp-ops-write-master-data',       'role-opsmanager', 'perm-write-master-data'),
@@ -115,7 +115,7 @@ INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES
   ('rp-ops-read-backups',            'role-opsmanager', 'perm-read-backups');
 
 -- ClassroomSupervisor: classroom ops + read master-data and parking
-INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES
+INSERT IGNORE INTO role_permissions (id, roleId, permissionId) VALUES
   ('rp-cls-read-auth',               'role-classroom-supervisor', 'perm-read-auth'),
   ('rp-cls-read-master-data',        'role-classroom-supervisor', 'perm-read-master-data'),
   ('rp-cls-read-classroom-ops',      'role-classroom-supervisor', 'perm-read-classroom-ops'),
@@ -124,7 +124,7 @@ INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES
   ('rp-cls-read-parking',            'role-classroom-supervisor', 'perm-read-parking');
 
 -- CustomerServiceAgent: after-sales + memberships
-INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES
+INSERT IGNORE INTO role_permissions (id, roleId, permissionId) VALUES
   ('rp-csa-read-auth',               'role-customer-service-agent', 'perm-read-auth'),
   ('rp-csa-read-after-sales',        'role-customer-service-agent', 'perm-read-after-sales'),
   ('rp-csa-write-after-sales',       'role-customer-service-agent', 'perm-write-after-sales'),
@@ -132,7 +132,7 @@ INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES
   ('rp-csa-write-memberships',       'role-customer-service-agent', 'perm-write-memberships');
 
 -- Auditor: read-only everything
-INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES
+INSERT IGNORE INTO role_permissions (id, roleId, permissionId) VALUES
   ('rp-aud-read-auth',               'role-auditor', 'perm-read-auth'),
   ('rp-aud-read-master-data',        'role-auditor', 'perm-read-master-data'),
   ('rp-aud-read-classroom-ops',      'role-auditor', 'perm-read-classroom-ops'),
@@ -145,7 +145,7 @@ INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES
   ('rp-aud-read-backups',            'role-auditor', 'perm-read-backups');
 
 -- Viewer: minimal read access
-INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES
+INSERT IGNORE INTO role_permissions (id, roleId, permissionId) VALUES
   ('rp-view-read-auth',              'role-viewer', 'perm-read-auth'),
   ('rp-view-read-master-data',       'role-viewer', 'perm-read-master-data'),
   ('rp-view-read-memberships',       'role-viewer', 'perm-read-memberships');

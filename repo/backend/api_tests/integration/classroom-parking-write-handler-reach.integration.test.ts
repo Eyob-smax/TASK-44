@@ -21,8 +21,7 @@ let anomalyIdForResolve = '';
 let parkingExceptionId = '';
 let parkingExceptionIdForEscalate = '';
 let assigneeUserId = '';
-let adminRoleId = '';
-let createdAdminRole = false;
+let supervisorRoleId = '';
 
 function authHeader(overrides: Partial<{
   userId: string;
@@ -96,20 +95,18 @@ describe('No-mock HTTP integration: classroom + parking write handler reach', ()
     });
     userId = user.id;
 
-    const existingAdminRole = await db.role.findUnique({ where: { name: 'Administrator' } });
-    if (existingAdminRole) {
-      adminRoleId = existingAdminRole.id;
-    } else {
-      const createdRole = await db.role.create({
-        data: {
-          name: 'Administrator',
-          description: 'Integration administrator role for classroom/parking test',
-          isSystem: false,
-        },
-      });
-      adminRoleId = createdRole.id;
-      createdAdminRole = true;
-    }
+    // Escalation target must have OpsManager or Administrator role.
+    // Use OpsManager to avoid mutating/deleting the shared Administrator role.
+    const supervisorRole = await db.role.upsert({
+      where: { name: 'OpsManager' },
+      update: {},
+      create: {
+        name: 'OpsManager',
+        description: 'Integration supervisor role for classroom/parking test',
+        isSystem: false,
+      },
+    });
+    supervisorRoleId = supervisorRole.id;
 
     const assignee = await db.user.create({
       data: {
@@ -122,7 +119,7 @@ describe('No-mock HTTP integration: classroom + parking write handler reach', ()
       },
     });
     assigneeUserId = assignee.id;
-    await db.userRole.create({ data: { userId: assigneeUserId, roleId: adminRoleId } });
+    await db.userRole.create({ data: { userId: assigneeUserId, roleId: supervisorRoleId } });
 
     const facility = await db.parkingFacility.create({
       data: {
@@ -144,9 +141,12 @@ describe('No-mock HTTP integration: classroom + parking write handler reach', ()
   });
 
   afterAll(async () => {
+    // ParkingEscalation holds a strict FK to users.escalatedToUserId, so remove
+    // escalations before deleting the assignee user.
     if (assigneeUserId) {
-      await db.userRole.deleteMany({ where: { userId: assigneeUserId } });
-      await db.user.deleteMany({ where: { id: assigneeUserId } });
+      await db.parkingEscalation.deleteMany({ where: { escalatedToUserId: assigneeUserId } });
+      await db.anomalyAssignment.deleteMany({ where: { assignedToUserId: assigneeUserId } });
+      await db.afterSalesTicket.deleteMany({ where: { assignedToUserId: assigneeUserId } });
     }
     await db.parkingEscalation.deleteMany({ where: { exceptionId: { in: [parkingExceptionId, parkingExceptionIdForEscalate].filter(Boolean) } } });
     await db.parkingException.deleteMany({ where: { id: { in: [parkingExceptionId, parkingExceptionIdForEscalate].filter(Boolean) } } });
@@ -154,6 +154,11 @@ describe('No-mock HTTP integration: classroom + parking write handler reach', ()
     await db.parkingEvent.deleteMany({ where: { readerId: parkingReaderId } });
     if (parkingReaderId) await db.parkingReader.deleteMany({ where: { id: parkingReaderId } });
     if (parkingFacilityId) await db.parkingFacility.deleteMany({ where: { id: parkingFacilityId } });
+
+    if (assigneeUserId) {
+      await db.userRole.deleteMany({ where: { userId: assigneeUserId } });
+      await db.user.deleteMany({ where: { id: assigneeUserId } });
+    }
 
     await db.anomalyResolution.deleteMany({ where: { anomalyEventId: { in: [anomalyIdForGet, anomalyIdForResolve].filter(Boolean) } } });
     await db.anomalyAssignment.deleteMany({ where: { anomalyEventId: { in: [anomalyIdForGet, anomalyIdForResolve].filter(Boolean) } } });
@@ -166,9 +171,6 @@ describe('No-mock HTTP integration: classroom + parking write handler reach', ()
     if (userId) await db.user.deleteMany({ where: { id: userId } });
     if (campusId) await db.campus.deleteMany({ where: { id: campusId } });
     if (orgId) await db.organization.deleteMany({ where: { id: orgId } });
-    if (createdAdminRole) {
-      await db.role.deleteMany({ where: { id: adminRoleId } });
-    }
   });
 
   it('covers classroom-ops handlers without mocks', async () => {
@@ -183,7 +185,7 @@ describe('No-mock HTTP integration: classroom + parking write handler reach', ()
     expect(heartbeatRes.body.success).toBe(true);
     const latestHeartbeat = await db.classroomHeartbeat.findFirst({
       where: { classroomId },
-      orderBy: { recordedAt: 'desc' },
+      orderBy: { receivedAt: 'desc' },
     });
     expect(latestHeartbeat).toBeTruthy();
     const classroomAfterHeartbeat = await db.classroom.findUnique({ where: { id: classroomId } });

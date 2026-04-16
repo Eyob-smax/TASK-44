@@ -26,18 +26,21 @@
 </template>
 
 <script setup lang="ts">
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: boolean;
   title: string;
   closeOnOverlay?: boolean;
-}>();
+}>(), {
+  // Keep default behavior intuitive: clicking overlay closes unless explicitly disabled.
+  closeOnOverlay: true,
+});
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
 }>();
 
 function handleClose() {
-  if (props.closeOnOverlay !== false) {
+  if (props.closeOnOverlay) {
     emit('update:modelValue', false);
   }
 }

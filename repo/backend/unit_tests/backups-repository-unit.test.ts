@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const rmMock = vi.fn();
+
 vi.mock('../src/app/container.js', () => ({
   db: {
     backupRecord: {
@@ -18,14 +20,13 @@ vi.mock('../src/app/config.js', () => ({
 
 vi.mock('fs/promises', () => ({
   default: {
-    rm: vi.fn(),
+    rm: rmMock,
   },
-  rm: vi.fn(),
+  rm: rmMock,
 }));
 
 const repo = await import('../src/modules/backups/repository.js');
 const { db } = await import('../src/app/container.js');
-const fs = await import('fs/promises');
 
 describe('backups repository unit', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -46,7 +47,7 @@ describe('backups repository unit', () => {
 
     const result = await repo.deleteExpiredBackups();
 
-    expect(fs.rm).toHaveBeenCalledTimes(2);
+    expect(rmMock).toHaveBeenCalledTimes(2);
     expect(result).toEqual({ count: 2, fileCount: 2 });
   });
 });

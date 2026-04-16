@@ -17,7 +17,7 @@ VALUES ('00000000-0000-0000-0000-000000000111', 'CampusOps Demo Organization', '
 -- Bcrypt hash for the password "password"
 SET @demo_password_hash = '$2a$10$7EqJtq98hPqEX7fNZaFWoOq6.7M3aMcMBXNIN1qNbfXDnpa9eKJe.';
 
-INSERT IGNORE INTO users (id, username, password_hash, salt, display_name, is_active, org_id) VALUES
+INSERT IGNORE INTO users (id, username, passwordHash, salt, displayName, isActive, orgId) VALUES
   ('user-demo-admin',      'demo.admin',      @demo_password_hash, 'demo-seed', 'Demo Administrator', TRUE, '00000000-0000-0000-0000-000000000111'),
   ('user-demo-ops',        'demo.ops',        @demo_password_hash, 'demo-seed', 'Demo OpsManager', TRUE, '00000000-0000-0000-0000-000000000111'),
   ('user-demo-classroom',  'demo.classroom',  @demo_password_hash, 'demo-seed', 'Demo Classroom Supervisor', TRUE, '00000000-0000-0000-0000-000000000111'),
@@ -25,7 +25,7 @@ INSERT IGNORE INTO users (id, username, password_hash, salt, display_name, is_ac
   ('user-demo-auditor',    'demo.auditor',    @demo_password_hash, 'demo-seed', 'Demo Auditor', TRUE, '00000000-0000-0000-0000-000000000111'),
   ('user-demo-viewer',     'demo.viewer',     @demo_password_hash, 'demo-seed', 'Demo Viewer', TRUE, '00000000-0000-0000-0000-000000000111');
 
-INSERT IGNORE INTO user_roles (id, user_id, role_id) VALUES
+INSERT IGNORE INTO user_roles (id, userId, roleId) VALUES
   ('ur-demo-admin',      'user-demo-admin',     'role-administrator'),
   ('ur-demo-ops',        'user-demo-ops',       'role-opsmanager'),
   ('ur-demo-classroom',  'user-demo-classroom', 'role-classroom-supervisor'),

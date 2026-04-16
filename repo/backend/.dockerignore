@@ -1,0 +1,31 @@
+# Prevent host dependencies/build artifacts from entering the image
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build/test outputs
+build
+dist
+coverage
+.vitest
+
+# Local env/editor/git artifacts
+.env
+.env.*
+*.log
+.git
+.gitignore
+.DS_Store
+.vscode
+.idea
+
+# Optional local caches
+.cache
+
+# Test-only assets not needed for image build/runtime
+api_tests
+unit_tests
+test_setup.ts
+vitest.config.ts

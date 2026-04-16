@@ -19,11 +19,49 @@ describe('No-mock semantic full-app contracts', () => {
     });
     orgId = org.id;
 
-    const adminRole = await db.role.findUnique({ where: { name: 'Administrator' } });
-    if (!adminRole) {
-      throw new Error('Administrator role is required for this integration test');
+    const existingAdminRole = await db.role.findUnique({ where: { name: 'Administrator' } });
+    if (existingAdminRole) {
+      adminRoleId = existingAdminRole.id;
+    } else {
+      const createdRole = await db.role.create({
+        data: {
+          name: 'Administrator',
+          description: 'Integration administrator role for semantic no-mock test',
+          isSystem: false,
+        },
+      });
+      adminRoleId = createdRole.id;
     }
-    adminRoleId = adminRole.id;
+
+    const readObservabilityPermission = await db.permission.upsert({
+      where: {
+        action_resource_scope: {
+          action: 'read',
+          resource: 'observability',
+          scope: '*',
+        },
+      },
+      update: {},
+      create: {
+        action: 'read',
+        resource: 'observability',
+        scope: '*',
+      },
+    });
+
+    await db.rolePermission.upsert({
+      where: {
+        roleId_permissionId: {
+          roleId: adminRoleId,
+          permissionId: readObservabilityPermission.id,
+        },
+      },
+      update: {},
+      create: {
+        roleId: adminRoleId,
+        permissionId: readObservabilityPermission.id,
+      },
+    });
 
     const user = await db.user.create({
       data: {

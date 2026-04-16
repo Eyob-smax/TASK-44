@@ -205,7 +205,6 @@ describe('No-mock full app HTTP smoke coverage', () => {
     const patch = await request(app)
       .patch('/api/config')
       .set('Authorization', authHeader())
-      .set('X-Idempotency-Key', `smoke-config-patch-${Date.now()}`)
       .send({ heartbeatFreshnessSeconds: updatedValue });
 
     expect(patch.status).toBe(200);
@@ -222,7 +221,6 @@ describe('No-mock full app HTTP smoke coverage', () => {
     await request(app)
       .patch('/api/config')
       .set('Authorization', authHeader())
-      .set('X-Idempotency-Key', `smoke-config-reset-${Date.now()}`)
       .send({ heartbeatFreshnessSeconds: originalValue });
   });
 });
