@@ -35,8 +35,18 @@ const { observabilityRouter } = await import('../src/modules/observability/route
 const { signRequest } = await import('../src/common/signing/api-signer.js');
 const { config } = await import('../src/app/config.js');
 
-const { recordMetric, getMetricsSummary, createAlertThreshold, listAlertEvents, acknowledgeAlertEvent, deleteAlertThreshold } =
-  await import('../src/modules/observability/service.js');
+const {
+  recordMetric,
+  getMetricsSummary,
+  createAlertThreshold,
+  listAlertEvents,
+  acknowledgeAlertEvent,
+  deleteAlertThreshold,
+  listAlertThresholds,
+  updateAlertThreshold,
+  listNotifications,
+  markNotificationRead,
+} = await import('../src/modules/observability/service.js');
 
 const jwtSecret = config.JWT_SECRET;
 
@@ -346,5 +356,166 @@ describe('Org-scoped data isolation', () => {
       .set('Authorization', authHeader({ orgId: 'org-1' }));
 
     expect(listAlertEvents).toHaveBeenCalledWith(false, 'org-1');
+  });
+});
+
+describe('GET /api/observability/thresholds', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with thresholds list scoped to caller org', async () => {
+    vi.mocked(listAlertThresholds).mockResolvedValue([
+      { id: 'th-1', metricName: 'cpu_utilization', operator: 'gt', thresholdValue: 90, isActive: true } as any,
+    ]);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/observability/thresholds')
+      .set('Authorization', authHeader({ orgId: 'org-1' }));
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveLength(1);
+    expect(listAlertThresholds).toHaveBeenCalledWith('org-1');
+  });
+
+  it('returns 403 when user lacks read:observability permission', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/observability/thresholds')
+      .set('Authorization', authHeader({ roles: ['Viewer'], permissions: ['read:logistics:*'] }));
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('FORBIDDEN');
+  });
+});
+
+describe('PATCH /api/observability/thresholds/:id', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with updated threshold for OpsManager', async () => {
+    vi.mocked(updateAlertThreshold).mockResolvedValue({
+      id: 'th-1',
+      metricName: 'cpu_utilization',
+      operator: 'gte',
+      thresholdValue: 95,
+      isActive: true,
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .patch('/api/observability/thresholds/th-1')
+      .set('Authorization', authHeader({ roles: ['OpsManager'], permissions: ['write:observability:*'] }))
+      .send({ thresholdValue: 95, operator: 'gte' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.thresholdValue).toBe(95);
+    expect(updateAlertThreshold).toHaveBeenCalledWith('th-1', expect.objectContaining({ thresholdValue: 95 }), 'org-1');
+  });
+
+  it('returns 400 when no fields are provided', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .patch('/api/observability/thresholds/th-1')
+      .set('Authorization', authHeader({ roles: ['OpsManager'], permissions: ['write:observability:*'] }))
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('returns 404 when threshold does not exist', async () => {
+    vi.mocked(updateAlertThreshold).mockRejectedValue(new NotFoundError('Alert threshold missing-id not found'));
+
+    const app = buildApp();
+    const res = await request(app)
+      .patch('/api/observability/thresholds/missing-id')
+      .set('Authorization', authHeader({ roles: ['Administrator'] }))
+      .send({ isActive: false });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('returns 403 when role is not Administrator/OpsManager', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .patch('/api/observability/thresholds/th-1')
+      .set('Authorization', authHeader({ roles: ['Auditor'], permissions: ['write:observability:*'] }))
+      .send({ isActive: false });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('Notifications endpoints', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('GET /notifications returns 200 with list', async () => {
+    vi.mocked(listNotifications).mockResolvedValue([
+      { id: 'notif-1', subject: 'CPU spike', readAt: null, createdAt: new Date().toISOString() } as any,
+    ]);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/observability/notifications')
+      .set('Authorization', authHeader({ orgId: 'org-1' }));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(listNotifications).toHaveBeenCalledWith(false, 'org-1');
+  });
+
+  it('GET /notifications forwards unreadOnly=true to service', async () => {
+    vi.mocked(listNotifications).mockResolvedValue([]);
+
+    const app = buildApp();
+    await request(app)
+      .get('/api/observability/notifications?unreadOnly=true')
+      .set('Authorization', authHeader({ orgId: 'org-1' }));
+
+    expect(listNotifications).toHaveBeenCalledWith(true, 'org-1');
+  });
+
+  it('GET /notifications returns 403 when user lacks read:observability permission', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/observability/notifications')
+      .set('Authorization', authHeader({ roles: ['Viewer'], permissions: ['read:logistics:*'] }));
+
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /notifications/:id/read returns 200 and marks notification read', async () => {
+    vi.mocked(markNotificationRead).mockResolvedValue(undefined as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/observability/notifications/notif-1/read')
+      .set('Authorization', authHeader({ orgId: 'org-1' }));
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(markNotificationRead).toHaveBeenCalledWith('notif-1', 'org-1');
+  });
+
+  it('POST /notifications/:id/read returns 404 when notification not found', async () => {
+    vi.mocked(markNotificationRead).mockRejectedValue(new NotFoundError('Notification not found'));
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/observability/notifications/missing-id/read')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('POST /notifications/:id/read returns 403 when user lacks write:observability permission', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/observability/notifications/notif-1/read')
+      .set('Authorization', authHeader({ roles: ['Viewer'], permissions: ['read:observability:*'] }));
+
+    expect(res.status).toBe(403);
   });
 });

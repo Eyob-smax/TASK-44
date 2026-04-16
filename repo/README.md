@@ -1,5 +1,7 @@
 # CampusOps — Fulfillment & Operations Platform
 
+Project type: fullstack
+
 A full-stack offline-LAN web application for managing classroom operations and on-premise logistics fulfillment for devices, materials, and lost-and-found returns. Runs entirely on a disconnected local network — no internet dependency at runtime.
 
 ## Stack
@@ -69,6 +71,12 @@ repo/
 | Frontend (nginx — TLS termination + SPA + `/api` proxy) | **443** |
 | Backend (Express — internal container HTTPS) | **4000** |
 | MySQL | **3306** |
+
+## Access URLs
+
+- Frontend UI: `https://localhost` (port 443)
+- Backend API base: `https://localhost/api`
+- Internal backend container endpoint: `https://backend:4000` (container network only)
 
 ## Offline / LAN Constraints
 
@@ -162,8 +170,8 @@ All primary user workflow screens are fully implemented with role-based access c
 - **Observability module**: runtime metric ingestion (HMAC-signed for internal agents), log search with level/date filters, configurable alert thresholds, alert event lifecycle (acknowledge), banner notifications, threshold auto-fire on metric ingestion via `evaluateThreshold()`
 - **Configuration module**: runtime-adjustable policy overlay (heartbeat freshness, stored-value flag, escalation threshold, log retention); changes persist in memory until restart; env-sourced fields (storagePath, backupPath) are not overridable at runtime
 - **Backups module**: trigger full backup (enqueues job, writes metadata JSON, purges expired records), trigger restore (enqueues job, runs structural verification), list backups and restore runs; 14-day retention enforced by backup worker
-- **Backend unit tests** (28 files): anomaly resolution, parking exception/escalation, shipping fee, compensation rules, coupon/member pricing, growth points, wallet ledger, SLA deadline, import row validation, export metadata, job-worker transitions, backup retention, config validation, circuit breaker, AES-256 encryption, API signing, password hashing, field masking, log sanitization, idempotency middleware, enum validation, validation schemas, observability thresholds, shipping calculator, compensation cap, auth service, carrier-sync-worker (rest_api/file_drop/manual connectors), and more
-- **Backend API tests** (15 files): auth, RBAC, idempotency, classroom-ops, parking, logistics, after-sales, memberships, import/export, observability, config, backups, files access, error-envelope contract, validation-errors contract
+- **Backend unit tests** (51 files): anomaly resolution, parking exception/escalation, shipping fee, compensation rules, coupon/member pricing, growth points, wallet ledger, SLA deadline, import row validation, export metadata, job-worker transitions, backup retention, config validation, circuit breaker, AES-256 encryption, API signing, password hashing, field masking, log sanitization, idempotency middleware, enum validation, validation schemas, observability thresholds, shipping calculator, compensation cap, auth service, carrier-sync-worker (rest_api/file_drop/manual connectors), and more
+- **Backend API tests** (26 files): contract tests plus DB-backed integration coverage for auth/RBAC, idempotency, classroom-ops, parking, logistics, after-sales, memberships, master-data, import/export, observability, config, backups, files access, error envelope and validation contracts
 - **Frontend shell** (`src/app/`): vue-router with 9 routes, role/permission-based navigation guard, AppLayout + AuthLayout
 - **Pinia stores**: `auth.store.ts` (JWT, user, permissions, localStorage persistence), `ui.store.ts` (notification queue)
 - **Typed API client**: Axios instance with auth token injection, error normalization to `ApiError`, per-module typed service adapters (auth, classroom-ops, parking, logistics, after-sales, memberships, master-data)
@@ -179,9 +187,9 @@ All primary user workflow screens are fully implemented with role-based access c
   - `MembershipsView` — three tabs: Members (search, create, wallet top-up/spend with receipt), Tiers (read-only), Fulfillment (coupon+wallet+line-items+idempotency); Auditor wallet read-only enforcement
   - `AdminView` — five tabs: Students (search), Import (entity select, trigger, 3s job polling, error-report CSV download link), Export (entity select, trigger, 3s polling, timestamped CSV download link), Config (runtime policy controls with Administrator-only write gating), Backups (backup list with status badges, Trigger Backup, Restore buttons for completed backups)
   - `ObservabilityView` — four tabs: Metrics (4 KPI cards for p95 latency/CPU/GPU/error rate), Logs (level+text search, paginated table), Alerts (alert event list with acknowledge, threshold creation panel for OpsManager+), Notifications (banner list with mark-read)
-- **Frontend unit tests** (18 files): auth guard, layout nav visibility, data table filtering, loading/error/empty states, idempotency key generation + duplicate-submit protection, idempotency header contract checks, API error normalization, polling composable, dashboard filters, fulfillment view, after-sales view, memberships view, admin view (Students/Import/Export), observability view, admin config+backups tabs, permissions helper, domain types, API error types
+- **Frontend unit tests** (19 files): auth guard, layout nav visibility, data table filtering, loading/error/empty states, idempotency key generation + duplicate-submit protection, idempotency header contract checks, API error normalization, polling composable, dashboard filters, fulfillment view, after-sales view, memberships view, admin view (Students/Import/Export), observability view, admin config+backups tabs, permissions helper, domain types, API error types
 - **Docker assets**: `docker-compose.yml` (3-service stack), `backend/Dockerfile` (reproducible `npm ci` build with prisma generate + prune), `frontend/Dockerfile` (2-stage build; nginx serves SPA with TLS termination and `/api` proxy), `frontend/nginx.conf` (HTTPS listener on 443, `/api/` proxy to backend, SPA fallback)
-- **Documentation**: `docs/design.md` §14 (Frontend Architecture), §15 (Primary User Workflows), §16 (Observability, Configuration, Backup), §17 (Testing Architecture & Coverage), §18 (Deployment & Runtime Configuration); `docs/api-spec.md` all endpoint groups; `docs/test-traceability.md` (full requirement-to-test mapping, 61 test files, 17 requirement areas)
+- **Documentation**: `docs/design.md` §14 (Frontend Architecture), §15 (Primary User Workflows), §16 (Observability, Configuration, Backup), §17 (Testing Architecture & Coverage), §18 (Deployment & Runtime Configuration); `docs/api-spec.md` all endpoint groups; `docs/test-traceability.md` (full requirement-to-test mapping, 96 test files, requirement traceability across backend and frontend)
 
 ## Running Tests
 
@@ -205,7 +213,7 @@ Note: test-only Docker artifacts are intentionally removed from this repository.
 Test locations:
 - `frontend/unit_tests/`  — Vue component / utility tests (Vitest + @vue/test-utils)
 - `backend/unit_tests/`   — Pure-logic domain rule tests (Vitest, no DB)
-- `backend/api_tests/`    — HTTP contract tests (Vitest + Supertest, services mocked)
+- `backend/api_tests/`    — HTTP contract tests and DB-backed integration tests (Vitest + Supertest)
 
 Coverage reports are written to `frontend/coverage/index.html` and
 `backend/coverage/index.html` when `COVERAGE=true`.
@@ -214,7 +222,7 @@ See `docs/test-traceability.md` for the full requirement-to-test mapping.
 
 ## Running the Application
 
-> Docker startup is self-contained. `docker compose up --build` builds the images, syncs the backend schema, and starts the stack.
+> Docker startup is self-contained. Use `docker-compose up` for strict compatibility with acceptance checks. `docker compose up --build` is also supported for rebuild flows.
 
 When ready:
 ```bash
@@ -222,7 +230,15 @@ When ready:
 cp .env.example .env
 
 # From repo/ root:
+docker-compose up
+
+# Optional rebuild path:
 docker compose up --build
+```
+
+Windows PowerShell equivalent for the copy step:
+```powershell
+Copy-Item .env.example .env
 ```
 
 Required environment variables (see `.env.example` for the full reference):
@@ -236,17 +252,67 @@ openssl req -x509 -newkey rsa:4096 -keyout certs/server.key -out certs/server.cr
         -days 3650 -nodes -subj "/CN=campusops-lan"
 ```
 
-**Database seeding** (first run only): after the schema is applied, seed RBAC roles and permissions:
+### Docker-contained bootstrap (automatic, no manual DB setup)
+
+`docker compose up --build` automatically runs idempotent RBAC + demo-user seeds in a one-shot `db-seed` container before the backend starts.
+
+Notes:
+- `001_rbac_seed.sql` and `003_demo_users_seed.sql` are executed by the `db-seed` service.
+- Seeds are idempotent (`INSERT IGNORE`), so repeated startups are safe.
+- `002_bootstrap_admin.sql.example` remains available for custom one-off operator bootstrap flows.
+
+## Demo Credentials
+
+Authentication is required.
+
+All demo users in `003_demo_users_seed.sql` use the same password:
+- Password: `password`
+
+| Role | Username |
+|------|----------|
+| Administrator | `demo.admin` |
+| OpsManager | `demo.ops` |
+| ClassroomSupervisor | `demo.classroom` |
+| CustomerServiceAgent | `demo.cs` |
+| Auditor | `demo.auditor` |
+| Viewer | `demo.viewer` |
+
+## Verification (Smoke Checks)
+
+After stack startup and seed bootstrap, verify the system with these checks.
+
+### 1) Login and token retrieval (API)
+
 ```bash
-mysql -u campusops -p campusops < backend/database/seeds/001_rbac_seed.sql
+curl -k -s https://localhost/api/auth/login \
+        -H 'Content-Type: application/json' \
+        -H 'X-Idempotency-Key: smoke-login-001' \
+        -d '{"username":"demo.admin","password":"password"}'
 ```
 
-Then create the initial administrator using operator-provided credentials from the template (replace placeholders before execution):
+Expected:
+- HTTP 200
+- JSON contains `success: true`
+- JSON contains `data.token`
+
+### 2) Authenticated profile call
+
 ```bash
-mysql -u campusops -p campusops < backend/database/seeds/002_bootstrap_admin.sql.example
+TOKEN="<paste_token_from_login>"
+curl -k -s https://localhost/api/auth/me -H "Authorization: Bearer $TOKEN"
 ```
 
-This creates all system roles (Administrator, OpsManager, ClassroomSupervisor, CustomerServiceAgent, Auditor, Viewer), their permission assignments, and a manually bootstrapped administrator user.
+Expected:
+- HTTP 200
+- `data.username` equals `demo.admin`
+
+### 3) Frontend access
+
+Open `https://localhost` in a browser and sign in with any demo user.
+
+Expected:
+- Login succeeds.
+- Navigation and visible modules change by role (for example, Viewer is read-only and cannot perform write actions).
 
 ## questions.md
 

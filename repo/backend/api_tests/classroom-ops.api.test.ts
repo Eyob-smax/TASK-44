@@ -29,6 +29,7 @@ vi.mock('../src/modules/classroom-ops/repository.js', () => ({
   upsertHeartbeat: vi.fn(),
   insertConfidenceSample: vi.fn(),
   findClassroomById: vi.fn(),
+  findCampusById: vi.fn(),
 }));
 
 vi.mock('../src/common/middleware/idempotency.js', () => ({
@@ -43,8 +44,8 @@ vi.mock('../src/app/container.js', () => ({
   },
 }));
 
-const { acknowledgeAnomaly, assignAnomaly, resolveAnomaly } = await import('../src/modules/classroom-ops/service.js');
-const { findAnomalyById } = await import('../src/modules/classroom-ops/repository.js');
+const { acknowledgeAnomaly, assignAnomaly, resolveAnomaly, getClassroomDashboard, ingestHeartbeat, ingestConfidence } = await import('../src/modules/classroom-ops/service.js');
+const { findAnomalyById, findClassroomById, findCampusById, createAnomalyEvent, listAnomalies } = await import('../src/modules/classroom-ops/repository.js');
 
 const jwtSecret = process.env.JWT_SECRET ?? 'test-jwt-secret';
 
@@ -284,5 +285,281 @@ describe('POST /api/classroom-ops/anomalies/:id/resolve', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('CONFLICT');
+  });
+});
+
+const CLASSROOM_ID = '00000000-0000-0000-0000-000000000aaa';
+const CAMPUS_ID = '00000000-0000-0000-0000-000000000bbb';
+
+describe('POST /api/classroom-ops/heartbeat', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 and ingests heartbeat for a classroom in the same org', async () => {
+    vi.mocked(findClassroomById).mockResolvedValue({
+      id: CLASSROOM_ID,
+      campus: { orgId: 'org-1' },
+    } as any);
+    vi.mocked(ingestHeartbeat).mockResolvedValue({
+      id: 'hb-1',
+      classroomId: CLASSROOM_ID,
+      receivedAt: new Date(),
+      metadata: null,
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/classroom-ops/heartbeat')
+      .set('Authorization', authHeader())
+      .send({ classroomId: CLASSROOM_ID });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(ingestHeartbeat).toHaveBeenCalledWith(CLASSROOM_ID, undefined);
+  });
+
+  it('returns 404 when classroom belongs to a different org', async () => {
+    vi.mocked(findClassroomById).mockResolvedValue({
+      id: CLASSROOM_ID,
+      campus: { orgId: 'org-2' },
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/classroom-ops/heartbeat')
+      .set('Authorization', authHeader({ orgId: 'org-1' }))
+      .send({ classroomId: CLASSROOM_ID });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('returns 400 VALIDATION_ERROR when classroomId is not a UUID', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/classroom-ops/heartbeat')
+      .set('Authorization', authHeader())
+      .send({ classroomId: 'not-a-uuid' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('POST /api/classroom-ops/confidence', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 and records confidence sample', async () => {
+    vi.mocked(findClassroomById).mockResolvedValue({
+      id: CLASSROOM_ID,
+      campus: { orgId: 'org-1' },
+    } as any);
+    vi.mocked(ingestConfidence).mockResolvedValue(undefined as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/classroom-ops/confidence')
+      .set('Authorization', authHeader())
+      .send({ classroomId: CLASSROOM_ID, confidence: 0.85 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(ingestConfidence).toHaveBeenCalledWith(CLASSROOM_ID, 0.85);
+  });
+
+  it('returns 400 when confidence is outside [0,1]', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/classroom-ops/confidence')
+      .set('Authorization', authHeader())
+      .send({ classroomId: CLASSROOM_ID, confidence: 1.5 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('POST /api/classroom-ops/anomalies', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 201 and creates an anomaly event', async () => {
+    vi.mocked(findClassroomById).mockResolvedValue({
+      id: CLASSROOM_ID,
+      campus: { orgId: 'org-1' },
+    } as any);
+    vi.mocked(createAnomalyEvent).mockResolvedValue({
+      id: 'anom-1',
+      classroomId: CLASSROOM_ID,
+      type: 'connectivity_loss',
+      severity: 'high',
+      description: 'Camera offline',
+      status: 'open',
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/classroom-ops/anomalies')
+      .set('Authorization', authHeader())
+      .send({
+        classroomId: CLASSROOM_ID,
+        type: 'connectivity_loss',
+        severity: 'high',
+        description: 'Camera offline',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.id).toBe('anom-1');
+  });
+
+  it('returns 403 when role does not permit creating anomalies', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/classroom-ops/anomalies')
+      .set('Authorization', authHeader({ roles: ['Auditor'] }))
+      .send({
+        classroomId: CLASSROOM_ID,
+        type: 'connectivity_loss',
+        severity: 'high',
+      });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 400 VALIDATION_ERROR when severity is invalid', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/classroom-ops/anomalies')
+      .set('Authorization', authHeader())
+      .send({
+        classroomId: CLASSROOM_ID,
+        type: 'connectivity_loss',
+        severity: 'BOGUS',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('GET /api/classroom-ops/anomalies', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with paginated anomalies and forwards orgId from token', async () => {
+    vi.mocked(listAnomalies).mockResolvedValue({
+      events: [{ id: 'anom-1', status: 'open' }] as any,
+      total: 1,
+    });
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/classroom-ops/anomalies?status=open&page=1&limit=25')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.anomalies).toHaveLength(1);
+    expect(res.body.data.total).toBe(1);
+    expect(listAnomalies).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'open' }),
+      expect.objectContaining({ page: 1, limit: 25 }),
+      'org-1',
+    );
+  });
+
+  it('returns 403 when permission is missing', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/classroom-ops/anomalies')
+      .set('Authorization', authHeader({ roles: ['Auditor'], permissions: ['read:after-sales:*'] }));
+
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('GET /api/classroom-ops/anomalies/:id', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with anomaly when found in same org', async () => {
+    vi.mocked(findAnomalyById).mockResolvedValue({
+      id: 'anom-1',
+      classroom: { campus: { orgId: 'org-1' } },
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/classroom-ops/anomalies/anom-1')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.id).toBe('anom-1');
+  });
+
+  it('returns 404 when anomaly not found', async () => {
+    vi.mocked(findAnomalyById).mockResolvedValue(null as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/classroom-ops/anomalies/missing-id')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('returns 404 when anomaly belongs to a different org', async () => {
+    vi.mocked(findAnomalyById).mockResolvedValue({
+      id: 'anom-1',
+      classroom: { campus: { orgId: 'org-2' } },
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/classroom-ops/anomalies/anom-1')
+      .set('Authorization', authHeader({ orgId: 'org-1' }));
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /api/classroom-ops/dashboard', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with dashboard data for a campus in the same org', async () => {
+    vi.mocked(findCampusById).mockResolvedValue({ id: CAMPUS_ID, orgId: 'org-1' } as any);
+    vi.mocked(getClassroomDashboard).mockResolvedValue({
+      campusId: CAMPUS_ID,
+      classrooms: [],
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get(`/api/classroom-ops/dashboard?campusId=${CAMPUS_ID}`)
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(getClassroomDashboard).toHaveBeenCalledWith(CAMPUS_ID);
+  });
+
+  it('returns 400 VALIDATION_ERROR when campusId query is missing', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/classroom-ops/dashboard')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('returns 404 when campus belongs to a different org', async () => {
+    vi.mocked(findCampusById).mockResolvedValue({ id: CAMPUS_ID, orgId: 'org-2' } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get(`/api/classroom-ops/dashboard?campusId=${CAMPUS_ID}`)
+      .set('Authorization', authHeader({ orgId: 'org-1' }));
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
   });
 });

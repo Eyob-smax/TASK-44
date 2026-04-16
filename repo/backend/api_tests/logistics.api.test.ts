@@ -297,3 +297,241 @@ describe('POST /api/orgs/:orgId/carriers — LAN URL enforcement', () => {
     expect(res.status).toBe(201);
   });
 });
+
+describe('POST /api/orgs/:orgId/warehouses', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 201 and creates a warehouse', async () => {
+    const { createWarehouse } = await import('../src/modules/logistics/repository.js');
+    vi.mocked(createWarehouse).mockResolvedValue({
+      id: 'wh-new',
+      orgId: ORG_ID,
+      name: 'New Warehouse',
+      address: '500 Industrial Way',
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_ID}/warehouses`)
+      .set('Authorization', authHeader())
+      .send({ name: 'New Warehouse', address: '500 Industrial Way' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.id).toBe('wh-new');
+    expect(createWarehouse).toHaveBeenCalledWith(ORG_ID, expect.objectContaining({ name: 'New Warehouse' }));
+  });
+
+  it('returns 400 when name is missing', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_ID}/warehouses`)
+      .set('Authorization', authHeader())
+      .send({ address: '500 Industrial Way' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('returns 403 when user lacks write:logistics permission', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_ID}/warehouses`)
+      .set('Authorization', authHeader({ roles: ['Auditor'], permissions: ['read:logistics:*'] }))
+      .send({ name: 'WH' });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('GET /api/orgs/:orgId/carriers', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with carriers list', async () => {
+    const { listCarriers } = await import('../src/modules/logistics/repository.js');
+    vi.mocked(listCarriers).mockResolvedValue([
+      { id: 'car-1', orgId: ORG_ID, name: 'LAN Carrier', connectorType: 'rest_api', isActive: true } as any,
+    ]);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get(`/api/orgs/${ORG_ID}/carriers`)
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveLength(1);
+    expect(listCarriers).toHaveBeenCalledWith(ORG_ID);
+  });
+});
+
+describe('Shipping fee templates endpoints', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('GET /shipping-fee-templates returns 200 with list', async () => {
+    const { listShippingFeeTemplates } = await import('../src/modules/logistics/repository.js');
+    vi.mocked(listShippingFeeTemplates).mockResolvedValue([
+      { id: 'tpl-1', orgId: ORG_ID, name: 'Standard CA', tier: 'standard', regionCode: 'CA' } as any,
+    ]);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get(`/api/orgs/${ORG_ID}/shipping-fee-templates`)
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+  });
+
+  it('POST /shipping-fee-templates returns 201 when creator has eligible role', async () => {
+    const { createShippingFeeTemplate } = await import('../src/modules/logistics/repository.js');
+    vi.mocked(createShippingFeeTemplate).mockResolvedValue({
+      id: 'tpl-new',
+      orgId: ORG_ID,
+      name: 'Standard CA',
+      baseFee: 5,
+      baseWeightLb: 2,
+      perAdditionalLbFee: 1,
+      regionCode: 'CA',
+      tier: 'standard',
+      minItems: 1,
+      maxItems: null,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_ID}/shipping-fee-templates`)
+      .set('Authorization', authHeader({ roles: ['OpsManager'], permissions: ['write:logistics:*'] }))
+      .send({
+        name: 'Standard CA',
+        baseFee: 5,
+        baseWeightLb: 2,
+        perAdditionalLbFee: 1,
+        regionCode: 'CA',
+        tier: 'standard',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.id).toBe('tpl-new');
+  });
+
+  it('POST /shipping-fee-templates returns 403 for ineligible role', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_ID}/shipping-fee-templates`)
+      .set('Authorization', authHeader({ roles: ['Auditor'], permissions: ['read:logistics:*'] }))
+      .send({
+        name: 'Standard CA',
+        baseFee: 5,
+        baseWeightLb: 2,
+        perAdditionalLbFee: 1,
+        regionCode: 'CA',
+        tier: 'standard',
+      });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /shipping-fee-templates returns 400 when baseFee is non-positive', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_ID}/shipping-fee-templates`)
+      .set('Authorization', authHeader({ roles: ['OpsManager'], permissions: ['write:logistics:*'] }))
+      .send({
+        name: 'Bad',
+        baseFee: 0,
+        baseWeightLb: 2,
+        perAdditionalLbFee: 1,
+        regionCode: 'CA',
+        tier: 'standard',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('POST /api/orgs/:orgId/delivery-zones', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 201 when Administrator creates a delivery zone', async () => {
+    const { createDeliveryZone } = await import('../src/modules/logistics/repository.js');
+    vi.mocked(createDeliveryZone).mockResolvedValue({
+      id: 'zone-1',
+      orgId: ORG_ID,
+      name: 'Bay Area',
+      regionCode: 'CA-BAY',
+      zipPatterns: JSON.stringify(['940%', '941%']),
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_ID}/delivery-zones`)
+      .set('Authorization', authHeader({ roles: ['Administrator'], permissions: ['write:logistics:*'] }))
+      .send({ name: 'Bay Area', regionCode: 'CA-BAY', zipPatterns: ['940%', '941%'] });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.id).toBe('zone-1');
+  });
+
+  it('returns 403 for non-administrator role', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_ID}/delivery-zones`)
+      .set('Authorization', authHeader({ roles: ['OpsManager'], permissions: ['write:logistics:*'] }))
+      .send({ name: 'Bay Area', regionCode: 'CA-BAY', zipPatterns: ['940%'] });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 400 when zipPatterns is empty', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_ID}/delivery-zones`)
+      .set('Authorization', authHeader({ roles: ['Administrator'], permissions: ['write:logistics:*'] }))
+      .send({ name: 'Bay Area', regionCode: 'CA-BAY', zipPatterns: [] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('POST /api/orgs/:orgId/non-serviceable-zips', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 201 when Administrator adds a 5-digit ZIP', async () => {
+    const { addNonServiceableZip } = await import('../src/modules/logistics/repository.js');
+    vi.mocked(addNonServiceableZip).mockResolvedValue({
+      id: 'nsz-1',
+      orgId: ORG_ID,
+      zipCode: '99999',
+      reason: 'Remote area',
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_ID}/non-serviceable-zips`)
+      .set('Authorization', authHeader({ roles: ['Administrator'], permissions: ['write:logistics:*'] }))
+      .send({ zipCode: '99999', reason: 'Remote area' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.zipCode).toBe('99999');
+  });
+
+  it('returns 400 when zipCode is not 5 digits', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_ID}/non-serviceable-zips`)
+      .set('Authorization', authHeader({ roles: ['Administrator'], permissions: ['write:logistics:*'] }))
+      .send({ zipCode: 'ABCDE' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+});

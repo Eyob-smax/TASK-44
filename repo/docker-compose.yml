@@ -19,6 +19,27 @@ services:
       retries: 12
       start_period: 120s
 
+  db-seed:
+    image: mysql:8.0
+    container_name: campusops-db-seed
+    restart: 'no'
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-campusops}
+      MYSQL_USER: ${MYSQL_USER:-campusops}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-campusops_pass}
+    volumes:
+      - ./backend/database/seeds:/seeds:ro
+    command:
+      - sh
+      - -lc
+      - |
+        set -eu
+        mysql -h mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" < /seeds/001_rbac_seed.sql
+        mysql -h mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" < /seeds/003_demo_users_seed.sql
+
   backend:
     build:
       context: ./backend
@@ -28,6 +49,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      db-seed:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       DATABASE_URL: mysql://${MYSQL_USER:-campusops}:${MYSQL_PASSWORD:-campusops_pass}@mysql:3306/${MYSQL_DATABASE:-campusops}
