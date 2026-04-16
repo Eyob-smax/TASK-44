@@ -405,3 +405,299 @@ describe('GET /api/members/fulfillments/:id', () => {
     expect(res.body.data.id).toBe('fulfil-own');
   });
 });
+
+const TIER_ID = '00000000-0000-0000-0000-000000001111';
+const STUDENT_ID = '00000000-0000-0000-0000-000000002222';
+
+describe('Membership tiers endpoints', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('GET /api/orgs/:orgId/membership-tiers returns 200 with tier list', async () => {
+    const { listTiers } = await import('../src/modules/memberships/repository.js');
+    vi.mocked(listTiers).mockResolvedValue([
+      { id: TIER_ID, orgId: 'org-1', name: 'Gold', level: 2, pointsThreshold: 100, benefits: '[]' } as any,
+    ]);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/orgs/org-1/membership-tiers')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveLength(1);
+  });
+
+  it('POST /api/orgs/:orgId/membership-tiers returns 201 for Administrator', async () => {
+    const { createTier } = await import('../src/modules/memberships/repository.js');
+    vi.mocked(createTier).mockResolvedValue({
+      id: TIER_ID,
+      orgId: 'org-1',
+      name: 'Platinum',
+      level: 3,
+      pointsThreshold: 500,
+      benefits: JSON.stringify(['Priority shipping']),
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orgs/org-1/membership-tiers')
+      .set('Authorization', authHeader({ roles: ['Administrator'], permissions: ['write:memberships:*'] }))
+      .send({
+        name: 'Platinum',
+        level: 3,
+        pointsThreshold: 500,
+        benefits: ['Priority shipping'],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.name).toBe('Platinum');
+  });
+
+  it('POST /api/orgs/:orgId/membership-tiers returns 403 for non-Administrator', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orgs/org-1/membership-tiers')
+      .set('Authorization', authHeader({ roles: ['OpsManager'], permissions: ['write:memberships:*'] }))
+      .send({
+        name: 'Gold',
+        level: 2,
+        pointsThreshold: 100,
+        benefits: ['Free shipping'],
+      });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /api/orgs/:orgId/membership-tiers returns 400 when benefits is empty', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orgs/org-1/membership-tiers')
+      .set('Authorization', authHeader({ roles: ['Administrator'], permissions: ['write:memberships:*'] }))
+      .send({
+        name: 'Gold',
+        level: 2,
+        pointsThreshold: 100,
+        benefits: [],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('POST /api/orgs/:orgId/members', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 201 with newly created member', async () => {
+    const { createMember } = await import('../src/modules/memberships/repository.js');
+    vi.mocked(createMember).mockResolvedValue({
+      id: 'mem-new',
+      orgId: 'org-1',
+      tierId: TIER_ID,
+      growthPoints: 0,
+      joinedAt: new Date(),
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orgs/org-1/members')
+      .set('Authorization', authHeader())
+      .send({ studentId: STUDENT_ID, tierId: TIER_ID });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.id).toBe('mem-new');
+    expect(createMember).toHaveBeenCalledWith('org-1', expect.objectContaining({ tierId: TIER_ID }));
+  });
+
+  it('returns 400 when tierId is missing', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orgs/org-1/members')
+      .set('Authorization', authHeader())
+      .send({ studentId: STUDENT_ID });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('returns 403 when user lacks write:memberships permission', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orgs/org-1/members')
+      .set('Authorization', authHeader({ roles: ['Auditor'], permissions: ['read:memberships:*'] }))
+      .send({ studentId: STUDENT_ID, tierId: TIER_ID });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('POST /api/orgs/:orgId/coupons', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 201 when OpsManager creates a coupon', async () => {
+    const { createCoupon } = await import('../src/modules/memberships/repository.js');
+    vi.mocked(createCoupon).mockResolvedValue({
+      id: 'cpn-1',
+      orgId: 'org-1',
+      code: 'SAVE10',
+      discountType: 'percentage',
+      discountValue: 10,
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orgs/org-1/coupons')
+      .set('Authorization', authHeader({ roles: ['OpsManager'], permissions: ['write:memberships:*'] }))
+      .send({
+        code: 'SAVE10',
+        discountType: 'percentage',
+        discountValue: 10,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.code).toBe('SAVE10');
+  });
+
+  it('returns 400 when coupon code contains lowercase letters', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orgs/org-1/coupons')
+      .set('Authorization', authHeader({ roles: ['OpsManager'], permissions: ['write:memberships:*'] }))
+      .send({
+        code: 'save10',
+        discountType: 'percentage',
+        discountValue: 10,
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('returns 403 when role is not Administrator or OpsManager', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orgs/org-1/coupons')
+      .set('Authorization', authHeader({ roles: ['Auditor'], permissions: ['write:memberships:*'] }))
+      .send({
+        code: 'SAVE10',
+        discountType: 'percentage',
+        discountValue: 10,
+      });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('GET /api/members/:id', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with member detail when in same org', async () => {
+    vi.mocked(findMemberById).mockResolvedValue({
+      id: 'mem-1',
+      orgId: 'org-1',
+      growthPoints: 250,
+      joinedAt: new Date('2026-01-15T00:00:00Z'),
+      tier: { name: 'Gold', level: 2 },
+      wallet: null,
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/members/mem-1')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.id).toBe('mem-1');
+    expect(res.body.data.tierName).toBe('Gold');
+    expect(res.body.data.walletEnabled).toBe(false);
+  });
+
+  it('returns 404 when member not found', async () => {
+    vi.mocked(findMemberById).mockResolvedValue(null as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/members/missing')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('returns 404 when member belongs to different org', async () => {
+    vi.mocked(findMemberById).mockResolvedValue({
+      id: 'mem-foreign',
+      orgId: 'org-2',
+      growthPoints: 0,
+      joinedAt: new Date(),
+      tier: { name: 'Bronze', level: 1 },
+      wallet: null,
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/members/mem-foreign')
+      .set('Authorization', authHeader({ orgId: 'org-1' }));
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /api/members/:id/wallet', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with wallet balance when member has a wallet', async () => {
+    vi.mocked(findMemberById).mockResolvedValue({
+      id: 'mem-1',
+      orgId: 'org-1',
+      tier: { name: 'Gold', level: 2 },
+      wallet: { id: 'wallet-1', isEnabled: true, encryptedBalance: 'enc:42.50' },
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/members/mem-1/wallet')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.walletId).toBe('wallet-1');
+    expect(res.body.data.balance).toBe(42.5);
+    expect(res.body.data.isEnabled).toBe(true);
+  });
+
+  it('returns 404 when wallet is not provisioned', async () => {
+    vi.mocked(findMemberById).mockResolvedValue({
+      id: 'mem-1',
+      orgId: 'org-1',
+      tier: { name: 'Bronze', level: 1 },
+      wallet: null,
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/members/mem-1/wallet')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('returns 404 when member belongs to a different org', async () => {
+    vi.mocked(findMemberById).mockResolvedValue({
+      id: 'mem-foreign',
+      orgId: 'org-2',
+      tier: { name: 'Gold', level: 2 },
+      wallet: { id: 'wallet-x', isEnabled: true, encryptedBalance: 'enc:10.00' },
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/members/mem-foreign/wallet')
+      .set('Authorization', authHeader({ orgId: 'org-1' }));
+
+    expect(res.status).toBe(404);
+  });
+});

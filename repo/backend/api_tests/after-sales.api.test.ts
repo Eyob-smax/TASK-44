@@ -36,6 +36,12 @@ vi.mock('../src/app/container.js', () => ({
     fileAsset: {
       findUnique: vi.fn(),
     },
+    role: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'role-1' }),
+    },
+    fieldMaskingRule: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
   },
 }));
 
@@ -44,7 +50,7 @@ vi.mock('../src/common/middleware/idempotency.js', () => ({
 }));
 
 const { createTicket, addEvidence, suggestCompensation, approveCompensation } = await import('../src/modules/after-sales/service.js');
-const { findSuggestionById, findTicketById, assignTicket } = await import('../src/modules/after-sales/repository.js');
+const { findSuggestionById, findTicketById, assignTicket, addTimelineEntry, updateTicketStatus } = await import('../src/modules/after-sales/repository.js');
 const { config } = await import('../src/app/config.js');
 
 const jwtSecret = config.JWT_SECRET;
@@ -363,5 +369,76 @@ describe('POST /api/tickets/:id/evidence', () => {
       .send({ fileAssetId: 'asset-foreign', description: 'test' });
 
     expect(res.status).toBe(403);
+  });
+});
+
+describe('GET /api/tickets/:id', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with ticket payload when ticket belongs to caller org', async () => {
+    vi.mocked(findTicketById).mockResolvedValue({
+      id: 'ticket-1',
+      orgId: 'org-1',
+      type: 'dispute',
+      status: 'open',
+      priority: 'medium',
+      description: 'Wrong item',
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/tickets/ticket-1')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.id).toBe('ticket-1');
+  });
+});
+
+describe('POST /api/tickets/:id/timeline', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 201 and creates a note timeline entry', async () => {
+    vi.mocked(findTicketById).mockResolvedValue({ id: 'ticket-1', orgId: 'org-1' } as any);
+    vi.mocked(addTimelineEntry).mockResolvedValue({
+      id: 'tl-1',
+      ticketId: 'ticket-1',
+      entryType: 'note',
+      content: 'Customer called support',
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/tickets/ticket-1/timeline')
+      .set('Authorization', authHeader())
+      .send({ content: 'Customer called support' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.entryType).toBe('note');
+  });
+});
+
+describe('POST /api/tickets/:id/status', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 and updates ticket status', async () => {
+    vi.mocked(findTicketById).mockResolvedValue({ id: 'ticket-1', orgId: 'org-1', status: 'open' } as any);
+    vi.mocked(updateTicketStatus).mockResolvedValue({
+      id: 'ticket-1',
+      orgId: 'org-1',
+      status: 'resolved',
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/tickets/ticket-1/status')
+      .set('Authorization', authHeader())
+      .send({ status: 'resolved' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.status).toBe('resolved');
   });
 });

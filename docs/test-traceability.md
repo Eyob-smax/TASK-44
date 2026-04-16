@@ -6,10 +6,10 @@ This document maps major functional requirements and business rules to the test 
 
 | Suite | Location | File Count |
 |-------|----------|-----------|
-| Backend unit tests | `backend/unit_tests/` | 29 |
-| Backend API tests (contract + integration) | `backend/api_tests/` | 19 |
-| Frontend unit / component tests | `frontend/unit_tests/` | 18 |
-| **Total** | | **66** |
+| Backend unit tests | `backend/unit_tests/` | 51 |
+| Backend API tests (contract + integration) | `backend/api_tests/` | 26 |
+| Frontend unit / component tests | `frontend/unit_tests/` | 19 |
+| **Total** | | **96** |
 
 ## Running Tests
 
@@ -33,7 +33,16 @@ COVERAGE=true ./run_tests.sh
 | No Authorization header → 401 | `api_tests/auth.api.test.ts` | `GET /api/auth/me` without token |
 | Invalid token → 401 | `api_tests/auth.api.test.ts` | malformed Bearer token |
 | Valid JWT → 200 /me response | `api_tests/auth.api.test.ts` | real token signed with test secret |
+| `POST /api/auth/logout` (no Authorization header) → 401 | `api_tests/auth.api.test.ts` | unauthenticated request rejected |
+| `POST /api/auth/logout` (authenticated) → 200 + security event recorded | `api_tests/auth.api.test.ts` | `recordSecurityEvent` called with logout type |
 | Auditor role cannot create users | `api_tests/rbac.api.test.ts` | `POST /api/admin/users` → 403 |
+| Non-existent user → 401 (no username enumeration) + loginAttempt recorded | `unit_tests/auth-login-unit.test.ts` | `recordLoginAttempt` called; `updateLoginFailure` not called |
+| Inactive user account → 401 "Account disabled" | `unit_tests/auth-login-unit.test.ts` | `isActive=false` guard |
+| Locked account (lockedUntil future) → 401 "temporarily locked" | `unit_tests/auth-login-unit.test.ts` | `lockedUntil > now` check |
+| Wrong password → increments failedAttempts, records security event | `unit_tests/auth-login-unit.test.ts` | `updateLoginFailure(id, newCount, undefined)` |
+| 5th failed attempt → sets lockedUntil ~30 min in future | `unit_tests/auth-login-unit.test.ts` | `lockedUntil instanceof Date`, ~30 min delta |
+| Successful login → JWT + roles + permissions returned | `unit_tests/auth-login-unit.test.ts` | `token.split('.')` length=3, `permissions` array |
+| Expired lockout (lockedUntil in past) → allows login | `unit_tests/auth-login-unit.test.ts` | token defined after past lock |
 | Administrator role passes role gate | `api_tests/rbac.api.test.ts` | non-403 when Administrator |
 | No token on admin route → 401 | `api_tests/rbac.api.test.ts` | unauthenticated request |
 | Password bcrypt hash + verify | `unit_tests/password-hashing.test.ts` | round-trip, wrong password fails |
@@ -74,7 +83,9 @@ COVERAGE=true ./run_tests.sh
 | Key TTL is ~24 hours | `unit_tests/idempotency-middleware.test.ts` | `buildIdempotencyKey()` expiresAt |
 | Wallet top-up idempotent | `api_tests/memberships.api.test.ts` | second call → same result |
 | Fulfillment idempotency key | `api_tests/memberships.api.test.ts` | `idempotencyKey` in body |
+| Fulfillment idempotency replay (DB-backed, no mocks) | `api_tests/integration/memberships-fulfillment.integration.test.ts` | same `idempotencyKey` returns same request ID |
 | Shipment idempotency header | `api_tests/logistics.api.test.ts` | same X-Idempotency-Key → same response |
+| Shipment idempotency replay (DB-backed, no mocks) | `api_tests/integration/logistics-shipments.integration.test.ts` | same key replays same `shipment.id` and avoids duplicate DB rows |
 | Frontend shipment adapter sends idempotency in header | `frontend/unit_tests/idempotency-header-contract.test.ts` | `X-Idempotency-Key` sent, no body key |
 | Frontend wallet adapters send idempotency in header | `frontend/unit_tests/idempotency-header-contract.test.ts` | topup/spend use `X-Idempotency-Key` |
 | `generateIdempotencyKey()` produces UUID | `frontend/unit_tests/idempotency-submit.test.ts` | format check |
@@ -103,7 +114,47 @@ COVERAGE=true ./run_tests.sh
 | `POST .../resolve` with note → 200 | `api_tests/classroom-ops.api.test.ts` | happy path |
 | `POST .../resolve` without note → 400 VALIDATION_ERROR | `api_tests/classroom-ops.api.test.ts` | schema enforcement |
 | `POST .../resolve` (already resolved) → 422 | `api_tests/classroom-ops.api.test.ts` | UnprocessableError mapped |
+| `POST .../resolve` (race-condition duplicate) → 409 CONFLICT | `api_tests/classroom-ops.api.test.ts` | ConflictError mapped |
+| `POST /api/classroom-ops/heartbeat` (same org) → 200 | `api_tests/classroom-ops.api.test.ts` | `ingestHeartbeat` called |
+| `POST /api/classroom-ops/heartbeat` (cross-org) → 404 | `api_tests/classroom-ops.api.test.ts` | NOT_FOUND on foreign classroom |
+| `POST /api/classroom-ops/heartbeat` (invalid UUID) → 400 | `api_tests/classroom-ops.api.test.ts` | VALIDATION_ERROR |
+| `POST /api/classroom-ops/confidence` → 200 | `api_tests/classroom-ops.api.test.ts` | confidence sample recorded |
+| `POST /api/classroom-ops/confidence` (out of [0,1]) → 400 | `api_tests/classroom-ops.api.test.ts` | schema bounds enforced |
+| `POST /api/classroom-ops/anomalies` → 201 | `api_tests/classroom-ops.api.test.ts` | anomaly created |
+| `POST /api/classroom-ops/anomalies` (ineligible role) → 403 | `api_tests/classroom-ops.api.test.ts` | permission gate |
+| `POST /api/classroom-ops/anomalies` (invalid severity) → 400 | `api_tests/classroom-ops.api.test.ts` | VALIDATION_ERROR |
+| `GET /api/classroom-ops/anomalies` → 200 + paginated, orgId forwarded | `api_tests/classroom-ops.api.test.ts` | `listAnomalies` receives orgId |
+| `GET /api/classroom-ops/anomalies` (no permission) → 403 | `api_tests/classroom-ops.api.test.ts` | permission gate |
+| `GET /api/classroom-ops/anomalies/:id` (same org) → 200 | `api_tests/classroom-ops.api.test.ts` | anomaly detail returned |
+| `GET /api/classroom-ops/anomalies/:id` (not found) → 404 | `api_tests/classroom-ops.api.test.ts` | null → NOT_FOUND |
+| `GET /api/classroom-ops/anomalies/:id` (cross-org) → 404 | `api_tests/classroom-ops.api.test.ts` | org isolation |
+| `GET /api/classroom-ops/dashboard` (same-org campus) → 200 | `api_tests/classroom-ops.api.test.ts` | dashboard payload |
+| `GET /api/classroom-ops/dashboard` (missing campusId) → 400 | `api_tests/classroom-ops.api.test.ts` | VALIDATION_ERROR |
+| `GET /api/classroom-ops/dashboard` (cross-org campus) → 404 | `api_tests/classroom-ops.api.test.ts` | org isolation |
 | Cross-org anomaly action requests return 404 | `api_tests/classroom-ops.api.test.ts` | acknowledge denied with NOT_FOUND |
+| `ingestHeartbeat`: throws NotFoundError when classroom not found | `unit_tests/classroom-ops-service-unit.test.ts` | `upsertHeartbeat` not called |
+| No anomaly when heartbeat fresh and classroom status online | `unit_tests/classroom-ops-service-unit.test.ts` | `createAnomalyEvent` not called |
+| CONNECTIVITY_LOSS HIGH anomaly when heartbeat older than threshold | `unit_tests/classroom-ops-service-unit.test.ts` | `type='connectivity_loss'`, `severity='high'` |
+| CONNECTIVITY_LOSS anomaly when classroom status is offline (regardless of heartbeat age) | `unit_tests/classroom-ops-service-unit.test.ts` | `createAnomalyEvent` called |
+| Metadata forwarded to `upsertHeartbeat` | `unit_tests/classroom-ops-service-unit.test.ts` | `{agent, cpu}` payload passed through |
+| No anomaly when `lastHeartbeatAt` is null and status online (first heartbeat) | `unit_tests/classroom-ops-service-unit.test.ts` | `createAnomalyEvent` not called |
+| `ingestConfidence`: throws NotFoundError when classroom not found | `unit_tests/classroom-ops-service-unit.test.ts` | `insertConfidenceSample` not called |
+| Confidence ≥ 0.7 → sample recorded, no anomaly | `unit_tests/classroom-ops-service-unit.test.ts` | `createAnomalyEvent` not called |
+| Confidence 0.5–0.7 → MEDIUM CONFIDENCE_DROP anomaly | `unit_tests/classroom-ops-service-unit.test.ts` | `severity='medium'`, description contains percentage |
+| Confidence < 0.5 → HIGH CONFIDENCE_DROP anomaly | `unit_tests/classroom-ops-service-unit.test.ts` | `severity='high'` |
+| Confidence boundary === 0.7 → no anomaly | `unit_tests/classroom-ops-service-unit.test.ts` | exact boundary excluded |
+| Confidence boundary === 0.5 → MEDIUM (not HIGH) | `unit_tests/classroom-ops-service-unit.test.ts` | boundary inclusive to medium |
+| `acknowledgeAnomaly`: throws NotFoundError when anomaly not found | `unit_tests/classroom-ops-service-unit.test.ts` | `createAcknowledgement` not called |
+| `acknowledgeAnomaly`: throws UnprocessableError when status is not OPEN | `unit_tests/classroom-ops-service-unit.test.ts` | resolved status rejected |
+| `acknowledgeAnomaly`: creates acknowledgement when OPEN | `unit_tests/classroom-ops-service-unit.test.ts` | `createAcknowledgement` called |
+| `assignAnomaly`: throws NotFoundError when not found | `unit_tests/classroom-ops-service-unit.test.ts` | `createAssignment` not called |
+| `assignAnomaly`: rejects when RESOLVED | `unit_tests/classroom-ops-service-unit.test.ts` | UnprocessableError |
+| `assignAnomaly`: allows when OPEN or ACKNOWLEDGED | `unit_tests/classroom-ops-service-unit.test.ts` | `createAssignment` called |
+| `resolveAnomaly`: throws NotFoundError when not found | `unit_tests/classroom-ops-service-unit.test.ts` | `createResolution` not called |
+| `resolveAnomaly`: throws UnprocessableError when already RESOLVED | `unit_tests/classroom-ops-service-unit.test.ts` | double-resolve rejected |
+| `resolveAnomaly`: allows resolution when OPEN | `unit_tests/classroom-ops-service-unit.test.ts` | `createResolution` called |
+| `getClassroomDashboard`: one row per classroom with confidence + open anomaly count | `unit_tests/classroom-ops-service-unit.test.ts` | null confidence when no sample |
+| `getClassroomDashboard`: returns empty array when campus has no classrooms | `unit_tests/classroom-ops-service-unit.test.ts` | `[]` |
 
 ---
 
@@ -127,6 +178,35 @@ COVERAGE=true ./run_tests.sh
 | Escalate (not found) → 404 | `api_tests/parking.api.test.ts` | null exception → 404 |
 | Cross-org exception fetch/escalate return 404 | `api_tests/parking.api.test.ts` | object-scope enforcement |
 | Missing readerId → 400 VALIDATION_ERROR | `api_tests/parking.api.test.ts` | required field |
+| `GET /api/parking/facilities` → 200 with facilities scoped to org | `api_tests/parking.api.test.ts` | `listFacilities` called with orgId |
+| `GET /api/parking/facilities` (no read:parking) → 403 | `api_tests/parking.api.test.ts` | FORBIDDEN envelope |
+| `GET /api/parking/facilities/:id/status` → 200 + summary | `api_tests/parking.api.test.ts` | `getParkingStatusSummary` called with facilityId + orgId |
+| `GET /api/parking/facilities/:id/status` (not found in org) → 404 | `api_tests/parking.api.test.ts` | NotFoundError mapped |
+| `GET /api/parking/facilities/:id/status` (no read:parking) → 403 | `api_tests/parking.api.test.ts` | permission gate |
+| `ingestParkingEvent`: throws NotFoundError when reader not found | `unit_tests/parking-service-unit.test.ts` | `createParkingEvent` not called |
+| Cross-tenant reader access rejected with NotFoundError | `unit_tests/parking-service-unit.test.ts` | facility orgId mismatch |
+| Returns `no_plate_exception` when plateNumber is null | `unit_tests/parking-service-unit.test.ts` | `createSession` not called |
+| Creates new session for entry event with no existing active session | `unit_tests/parking-service-unit.test.ts` | `action='session_created'` |
+| Duplicate entry raises `duplicate_plate_exception` | `unit_tests/parking-service-unit.test.ts` | `createException` with `type='duplicate_plate'` |
+| Completes active session on matching exit event | `unit_tests/parking-service-unit.test.ts` | `action='session_completed'` |
+| Exit with no active session raises `inconsistent_entry_exit_exception` | `unit_tests/parking-service-unit.test.ts` | `createException` called |
+| Unknown event type → `noop` action | `unit_tests/parking-service-unit.test.ts` | no session/exception created |
+| `checkOvertimeSessions`: returns empty when no sessions exceed threshold | `unit_tests/parking-service-unit.test.ts` | `createException` not called |
+| Creates overtime exception only for sessions without existing one | `unit_tests/parking-service-unit.test.ts` | `hasOpenOvertimeException` gate |
+| Honors custom `overtimeThresholdHours` parameter | `unit_tests/parking-service-unit.test.ts` | cutoff Date computed correctly |
+| `checkUnsettledSessions`: creates UNSETTLED exception for sessions without existing one | `unit_tests/parking-service-unit.test.ts` | `hasUnsettledException` gate |
+| `escalateDueExceptions`: returns empty when no exceptions or none eligible | `unit_tests/parking-service-unit.test.ts` | role lookup not called |
+| `escalateDueExceptions`: returns empty when OpsManager role not seeded or no user has role | `unit_tests/parking-service-unit.test.ts` | `escalateException` not called |
+| `escalateDueExceptions`: escalates only eligible exceptions to supervisor | `unit_tests/parking-service-unit.test.ts` | 2 of 3 exceptions escalated |
+| `getParkingStatusSummary`: delegates directly to repository | `unit_tests/parking-service-unit.test.ts` | `getParkingStatus` called |
+| `EscalationCheckWorker`: returns early when facility not found | `unit_tests/escalation-check-worker.test.ts` | `parkingException.findMany` not called |
+| Returns early when no open exceptions exist | `unit_tests/escalation-check-worker.test.ts` | `role.findFirst` not called |
+| Does not escalate when no exception crossed threshold | `unit_tests/escalation-check-worker.test.ts` | fresh exception skipped |
+| Warns and returns when OpsManager role not seeded | `unit_tests/escalation-check-worker.test.ts` | `escalateException` not called |
+| Warns and returns when no org-scoped OpsManager user | `unit_tests/escalation-check-worker.test.ts` | `escalateException` not called |
+| Escalates every eligible open exception to org-scoped supervisor | `unit_tests/escalation-check-worker.test.ts` | called exactly 2 times for eligible exceptions |
+| Continues escalating remaining exceptions when one repo call throws | `unit_tests/escalation-check-worker.test.ts` | bulk error doesn't abort batch |
+| Exposes `escalation_check` as worker type | `unit_tests/escalation-check-worker.test.ts` | `worker.type` value |
 
 ---
 
@@ -153,7 +233,25 @@ COVERAGE=true ./run_tests.sh
 | `GET /api/orgs/:orgId/shipments` → paginated list | `api_tests/logistics.api.test.ts` | data array + meta.total |
 | DB-backed shipment list is org-scoped | `api_tests/integration/logistics-memberships-api.integration.test.ts` | same-org returns only own shipment |
 | DB-backed cross-org shipment list denied | `api_tests/integration/logistics-memberships-api.integration.test.ts` | org mismatch returns 404 |
+| DB-backed shipment tracking update transitions shipment to delivered | `api_tests/integration/logistics-shipments.integration.test.ts` | `/tracking` update sets shipment status + persisted tracking row |
+| DB-backed shipment fetch hides cross-org resource behind 404 | `api_tests/integration/logistics-shipments.integration.test.ts` | org mismatch on `/api/shipments/:id` returns NOT_FOUND |
+| DB-backed shipping fee calculate endpoint resolves template + surcharges | `api_tests/integration/logistics-shipping-fee-calculate.integration.test.ts` | `GET /api/orgs/:orgId/shipping-fee-templates/calculate` returns computed total |
+| DB-backed shipping fee calculate returns 404 when no template matches | `api_tests/integration/logistics-shipping-fee-calculate.integration.test.ts` | unmatched region/tier returns NOT_FOUND |
+| DB-backed shipping fee calculate enforces org boundary | `api_tests/integration/logistics-shipping-fee-calculate.integration.test.ts` | cross-org token/path mismatch returns 404 |
 | Missing `read:logistics` permission → 403 | `api_tests/logistics.api.test.ts` | permission enforcement inline |
+| `POST /api/orgs/:orgId/warehouses` (valid) → 201 | `api_tests/logistics.api.test.ts` | warehouse record returned |
+| `POST /api/orgs/:orgId/warehouses` (missing name) → 400 | `api_tests/logistics.api.test.ts` | VALIDATION_ERROR |
+| `POST /api/orgs/:orgId/warehouses` (no write:logistics) → 403 | `api_tests/logistics.api.test.ts` | permission gate |
+| `GET /api/orgs/:orgId/carriers` → 200 + carriers list | `api_tests/logistics.api.test.ts` | `listCarriers` returns array |
+| `GET /api/orgs/:orgId/shipping-fee-templates` → 200 + templates list | `api_tests/logistics.api.test.ts` | template array in response |
+| `POST /api/orgs/:orgId/shipping-fee-templates` (eligible role) → 201 | `api_tests/logistics.api.test.ts` | template created |
+| `POST /api/orgs/:orgId/shipping-fee-templates` (ineligible role) → 403 | `api_tests/logistics.api.test.ts` | permission gate |
+| `POST /api/orgs/:orgId/shipping-fee-templates` (baseFee ≤ 0) → 400 | `api_tests/logistics.api.test.ts` | VALIDATION_ERROR |
+| `POST /api/orgs/:orgId/delivery-zones` (Administrator) → 201 | `api_tests/logistics.api.test.ts` | zone created |
+| `POST /api/orgs/:orgId/delivery-zones` (non-Administrator) → 403 | `api_tests/logistics.api.test.ts` | role gate |
+| `POST /api/orgs/:orgId/delivery-zones` (empty zipPatterns) → 400 | `api_tests/logistics.api.test.ts` | VALIDATION_ERROR |
+| `POST /api/orgs/:orgId/non-serviceable-zips` (Administrator, 5-digit) → 201 | `api_tests/logistics.api.test.ts` | ZIP persisted |
+| `POST /api/orgs/:orgId/non-serviceable-zips` (invalid ZIP) → 400 | `api_tests/logistics.api.test.ts` | schema regex enforced |
 | rest_api connector fetches and stores updates | `unit_tests/carrier-sync-worker.test.ts` | addTrackingUpdate called 2x |
 | rest_api connector HTTP failure → sets errorState + rethrows | `unit_tests/carrier-sync-worker.test.ts` | cursor.errorState set |
 | rest_api connector empty response → cursor updated | `unit_tests/carrier-sync-worker.test.ts` | addTrackingUpdate not called |
@@ -162,6 +260,22 @@ COVERAGE=true ./run_tests.sh
 | file_drop skips files before last cursor | `unit_tests/carrier-sync-worker.test.ts` | skipped by mtime check |
 | manual connector: no-op, updates cursor | `unit_tests/carrier-sync-worker.test.ts` | addTrackingUpdate not called |
 | carrier not found → early return | `unit_tests/carrier-sync-worker.test.ts` | upsert not called |
+| `calculateFee`: throws NotFoundError when no template matches region/tier/itemCount | `unit_tests/logistics-service-unit.test.ts` | `findTemplateByRegionAndTier` returns null |
+| `calculateFee`: base-only fee when weight ≤ baseWeightLb and no surcharges | `unit_tests/logistics-service-unit.test.ts` | `additionalWeightFee=0`, `totalFee=baseFee` |
+| `calculateFee`: per-lb overage added when weight exceeds baseWeightLb | `unit_tests/logistics-service-unit.test.ts` | `additionalWeightFee=(excess)*perLbFee` |
+| `calculateFee`: only surcharges matching `applicableSurcharges` are added | `unit_tests/logistics-service-unit.test.ts` | 2 of 3 surcharges applied |
+| `createShipment`: throws NotFoundError when warehouse not found | `unit_tests/logistics-service-unit.test.ts` | `createShipment` not called |
+| `createShipment`: throws NotFoundError when warehouse is cross-tenant | `unit_tests/logistics-service-unit.test.ts` | orgId mismatch rejected |
+| `createShipment`: throws NotFoundError when carrier not found | `unit_tests/logistics-service-unit.test.ts` | `createShipment` not called |
+| `createShipment`: throws NotFoundError when carrier is cross-tenant | `unit_tests/logistics-service-unit.test.ts` | orgId mismatch rejected |
+| `createShipment`: succeeds when warehouse and carrier are both in-org | `unit_tests/logistics-service-unit.test.ts` | `createShipment` called |
+| `recordTrackingUpdate`: throws NotFoundError when shipment not found | `unit_tests/logistics-service-unit.test.ts` | `addTrackingUpdate` not called |
+| `recordTrackingUpdate`: records update and sets `shippedAt` for "shipped" status | `unit_tests/logistics-service-unit.test.ts` | `updateShipmentStatus` called with Date |
+| `recordTrackingUpdate`: records update without timestamp metadata for "in_transit" | `unit_tests/logistics-service-unit.test.ts` | no timestamp in update call |
+| `recordTrackingUpdate`: records update and sets `deliveredAt` for "delivered" status | `unit_tests/logistics-service-unit.test.ts` | `deliveredAt` Date present |
+| `recordTrackingUpdate`: adds tracking entry but does NOT change shipment status for "exception" | `unit_tests/logistics-service-unit.test.ts` | `updateShipmentStatus` not called |
+| `getShipmentWithDetails`: throws NotFoundError when shipment not found | `unit_tests/logistics-service-unit.test.ts` | null → error |
+| `getShipmentWithDetails`: returns shipment with repo shape when found | `unit_tests/logistics-service-unit.test.ts` | same reference returned |
 
 ---
 
@@ -190,9 +304,32 @@ COVERAGE=true ./run_tests.sh
 | `POST .../approve` (rejected + notes) → 200 | `api_tests/after-sales.api.test.ts` | decision='rejected' |
 | `POST .../approve` (already processed) → 422 | `api_tests/after-sales.api.test.ts` | UnprocessableError |
 | `POST .../evidence` → 201 + timeline entry | `api_tests/after-sales.api.test.ts` | entryType='evidence_added' |
+| DB-backed `GET /api/orgs/:orgId/tickets` returns org-scoped tickets only | `api_tests/integration/after-sales-tickets.integration.test.ts` | own-org list returns only own ticket |
+| DB-backed `GET /api/orgs/:orgId/tickets` rejects cross-org access | `api_tests/integration/after-sales-tickets.integration.test.ts` | enforceSameOrg returns 404 |
+| DB-backed `GET /api/orgs/:orgId/tickets` enforces read permission | `api_tests/integration/after-sales-tickets.integration.test.ts` | missing `read:after-sales:*` returns 403 |
 | SLA overdue indicator in UI | `frontend/unit_tests/after-sales-view.test.ts` | `.sla-overdue` class |
 | SLA near indicator in UI | `frontend/unit_tests/after-sales-view.test.ts` | `.sla-near` class |
 | Far deadline → no SLA classes | `frontend/unit_tests/after-sales-view.test.ts` | neither class |
+| `createTicket`: creates medium-priority ticket with 24h SLA deadline when priority omitted | `unit_tests/after-sales-service-unit.test.ts` | `priority='medium'`, ~24h delta |
+| `createTicket`: sets 4h SLA deadline for urgent priority | `unit_tests/after-sales-service-unit.test.ts` | ~4h delta |
+| `createTicket`: throws NotFoundError when shipmentId refers to missing shipment | `unit_tests/after-sales-service-unit.test.ts` | `createTicket` not called |
+| `createTicket`: throws NotFoundError when shipment belongs to different org | `unit_tests/after-sales-service-unit.test.ts` | org boundary enforced |
+| `createTicket`: throws NotFoundError when parcel not found | `unit_tests/after-sales-service-unit.test.ts` | `createTicket` not called |
+| `createTicket`: throws NotFoundError when parcel is cross-org or doesn't match shipment | `unit_tests/after-sales-service-unit.test.ts` | org + shipment boundary |
+| `addEvidence`: throws NotFoundError when ticket not found | `unit_tests/after-sales-service-unit.test.ts` | `addEvidence` repo not called |
+| `addEvidence`: throws UnprocessableError when ticket is CLOSED | `unit_tests/after-sales-service-unit.test.ts` | closed guard |
+| `addEvidence`: adds evidence when ticket is open | `unit_tests/after-sales-service-unit.test.ts` | `addEvidence` called with fileAssetId |
+| `suggestCompensation`: throws NotFoundError when ticket not found | `unit_tests/after-sales-service-unit.test.ts` | `createSuggestion` not called |
+| `suggestCompensation`: throws UnprocessableError when ticket type has no compensation trigger | `unit_tests/after-sales-service-unit.test.ts` | "other" type rejected |
+| `suggestCompensation`: throws NotFoundError when no active policy for trigger type | `unit_tests/after-sales-service-unit.test.ts` | empty policies |
+| `suggestCompensation`: throws UnprocessableError when compensation cap exhausted | `unit_tests/after-sales-service-unit.test.ts` | `createSuggestion` not called |
+| `suggestCompensation`: creates suggestion capped at per-ticket remaining budget | `unit_tests/after-sales-service-unit.test.ts` | `suggestedAmount` capped to remaining |
+| `suggestCompensation`: creates suggestion with full policy amount when budget allows | `unit_tests/after-sales-service-unit.test.ts` | full `compensationAmount` used |
+| `approveCompensation`: throws NotFoundError when suggestion not found | `unit_tests/after-sales-service-unit.test.ts` | `createApproval` not called |
+| `approveCompensation`: throws UnprocessableError when suggestion is not pending | `unit_tests/after-sales-service-unit.test.ts` | already-approved rejected |
+| `approveCompensation`: throws UnprocessableError when approval would exceed cap | `unit_tests/after-sales-service-unit.test.ts` | cap guard |
+| `approveCompensation`: records approved decision when within cap | `unit_tests/after-sales-service-unit.test.ts` | `createApproval` with `decision='approved'` |
+| `approveCompensation`: records rejected decision without checking cap | `unit_tests/after-sales-service-unit.test.ts` | `findApprovedSuggestionsTotal` not called |
 
 ---
 
@@ -228,13 +365,58 @@ COVERAGE=true ./run_tests.sh
 | `POST .../fulfillments` (valid coupon) → discount applied | `api_tests/memberships.api.test.ts` | discountAmount > 0 |
 | `POST .../fulfillments` (expired coupon) → 422 | `api_tests/memberships.api.test.ts` | error surfaced |
 | Fulfillment idempotent by key | `api_tests/memberships.api.test.ts` | same id both calls |
+| Fulfillment idempotent by key (DB-backed service path) | `api_tests/integration/memberships-fulfillment.integration.test.ts` | duplicate POST reuses the same fulfillment record |
 | Fulfillment detail is org-scoped | `api_tests/memberships.api.test.ts` | same-org 200, cross-org 404 |
+| Fulfillment detail org-scope enforced (DB-backed) | `api_tests/integration/memberships-fulfillment.integration.test.ts` | same-org 200, cross-org 404 on `/api/members/fulfillments/:id` |
+| `GET /api/orgs/:orgId/membership-tiers` → 200 + tiers list | `api_tests/memberships.api.test.ts` | tier array in response |
+| `POST /api/orgs/:orgId/membership-tiers` (Administrator) → 201 | `api_tests/memberships.api.test.ts` | tier created |
+| `POST /api/orgs/:orgId/membership-tiers` (non-Administrator) → 403 | `api_tests/memberships.api.test.ts` | role gate |
+| `POST /api/orgs/:orgId/membership-tiers` (empty benefits) → 400 | `api_tests/memberships.api.test.ts` | VALIDATION_ERROR |
+| `POST /api/orgs/:orgId/members` (valid) → 201 | `api_tests/memberships.api.test.ts` | member record returned |
+| `POST /api/orgs/:orgId/members` (missing tierId) → 400 | `api_tests/memberships.api.test.ts` | VALIDATION_ERROR |
+| `POST /api/orgs/:orgId/members` (no write:memberships) → 403 | `api_tests/memberships.api.test.ts` | permission gate |
+| `POST /api/orgs/:orgId/coupons` (OpsManager) → 201 | `api_tests/memberships.api.test.ts` | coupon created |
+| `POST /api/orgs/:orgId/coupons` (lowercase code) → 400 | `api_tests/memberships.api.test.ts` | regex validation fails |
+| `POST /api/orgs/:orgId/coupons` (ineligible role) → 403 | `api_tests/memberships.api.test.ts` | role gate |
+| `GET /api/members/:id` (same org) → 200 | `api_tests/memberships.api.test.ts` | member detail returned |
+| `GET /api/members/:id` (not found) → 404 | `api_tests/memberships.api.test.ts` | NOT_FOUND |
+| `GET /api/members/:id` (cross-org) → 404 | `api_tests/memberships.api.test.ts` | org isolation |
+| `GET /api/members/:id/wallet` → 200 + decrypted balance | `api_tests/memberships.api.test.ts` | encrypted balance parsed |
+| `GET /api/members/:id/wallet` (no wallet) → 404 | `api_tests/memberships.api.test.ts` | wallet absent → NOT_FOUND |
+| `GET /api/members/:id/wallet` (cross-org) → 404 | `api_tests/memberships.api.test.ts` | org isolation |
 | Auditor read-only wallet | `frontend/unit_tests/memberships-view.test.ts` | no top-up/spend UI |
 | OpsManager wallet controls | `frontend/unit_tests/memberships-view.test.ts` | top-up form present |
 | Fulfillment form validates line items | `frontend/unit_tests/memberships-view.test.ts` | error on empty items |
 | Coupon code passed to service | `frontend/unit_tests/memberships-view.test.ts` | couponCode in payload |
 | DB-backed member list is org-scoped | `api_tests/integration/logistics-memberships-api.integration.test.ts` | same-org returns only own member |
 | DB-backed member list enforces read permission | `api_tests/integration/logistics-memberships-api.integration.test.ts` | missing `read:memberships` returns 403 |
+| `createFulfillment`: returns existing fulfillment when idempotency key already used | `unit_tests/memberships-service-unit.test.ts` | `createFulfillmentRequest` not called |
+| Guest checkout computes `totalAmount` with no member pricing applied | `unit_tests/memberships-service-unit.test.ts` | `discountAmount=0`, `shippingFee=0` |
+| Throws NotFoundError when memberId refers to missing member | `unit_tests/memberships-service-unit.test.ts` | `createFulfillmentRequest` not called |
+| Rejects cross-org member as NotFoundError | `unit_tests/memberships-service-unit.test.ts` | different `orgId` rejected |
+| Applies member pricing rule when `itemCategory` matches; earns growth points | `unit_tests/memberships-service-unit.test.ts` | `memberPrice`, `addPointTransaction` called |
+| Does not apply pricing when `itemCategory` matches no rule | `unit_tests/memberships-service-unit.test.ts` | `memberPrice=undefined` |
+| Throws NotFoundError when coupon code not found | `unit_tests/memberships-service-unit.test.ts` | rejected before fulfillment |
+| Throws Unprocessable when coupon inactive, expired, or redemption cap reached | `unit_tests/memberships-service-unit.test.ts` | each validation guard |
+| Throws Unprocessable when coupon restricted to different tier | `unit_tests/memberships-service-unit.test.ts` | `tierId` mismatch |
+| Throws Unprocessable when `totalAmount` below `minOrderAmount` | `unit_tests/memberships-service-unit.test.ts` | order minimum guard |
+| Applies percentage coupon; increments redemption and creates redemption record | `unit_tests/memberships-service-unit.test.ts` | `discountAmount=10%`, `incrementCouponRedemption` called |
+| Applies fixed-amount coupon capped at `totalAmount` (prevents negative finalAmount) | `unit_tests/memberships-service-unit.test.ts` | `discountAmount` capped |
+| Throws Unprocessable when shipping ZIP not serviceable | `unit_tests/memberships-service-unit.test.ts` | `isZipServiceable=false` |
+| Skips shipping when `shippingZipCode`/`shippingTier` not provided | `unit_tests/memberships-service-unit.test.ts` | `shippingFee=0` |
+| Applies template-based shipping fee when zip is serviceable | `unit_tests/memberships-service-unit.test.ts` | `shippingFee > 0` |
+| Falls back to `shippingFee=0` when no matching template | `unit_tests/memberships-service-unit.test.ts` | null template → zero fee |
+| Rejects `useWallet=true` when `storedValueEnabled=false` | `unit_tests/memberships-service-unit.test.ts` | Unprocessable |
+| Spends from wallet up to balance; links wallet ledger entry to receipt | `unit_tests/memberships-service-unit.test.ts` | `spendFromWallet` called, receipt has `walletLedgerEntryId` |
+| Creates basic receipt without wallet spend when wallet disabled | `unit_tests/memberships-service-unit.test.ts` | `spendFromWallet` not called |
+| `topUpWallet`: creates wallet on first top-up when none exists | `unit_tests/memberships-service-unit.test.ts` | `createWallet` called |
+| `topUpWallet`: throws NotFoundError when first top-up has no member | `unit_tests/memberships-service-unit.test.ts` | null member |
+| `topUpWallet`: throws Unprocessable when wallet disabled | `unit_tests/memberships-service-unit.test.ts` | `isEnabled=false` |
+| `topUpWallet`: tops up existing enabled wallet | `unit_tests/memberships-service-unit.test.ts` | `topUpWallet` repo called |
+| `spendFromWallet`: throws NotFoundError when wallet not found | `unit_tests/memberships-service-unit.test.ts` | null wallet |
+| `spendFromWallet`: creates a receipt after successful spend | `unit_tests/memberships-service-unit.test.ts` | `createReceipt` called |
+| `upgradeIfEligible`: returns silently when member not found or already at top tier | `unit_tests/memberships-service-unit.test.ts` | `updateMemberTier` not called |
+| `upgradeIfEligible`: upgrades when `growthPoints` meets/exceeds next tier threshold | `unit_tests/memberships-service-unit.test.ts` | `updateMemberTier` called |
 
 ---
 
@@ -267,6 +449,22 @@ COVERAGE=true ./run_tests.sh
 | Export completed → fileAssetId set | `api_tests/import-export.api.test.ts` | status='completed' |
 | Export in-progress → fileAssetId null | `api_tests/import-export.api.test.ts` | status='processing' |
 | Export job is org-scoped | `api_tests/import-export.api.test.ts` | cross-org request → 404 |
+| `ExportWorker`: exposes `export` as worker type | `unit_tests/export-worker.test.ts` | `worker.type` value |
+| Writes CSV for students and transitions job `processing` → `completed` | `unit_tests/export-worker.test.ts` | both `exportJob.update` calls checked |
+| CSV escapes quotes, commas, and embedded newlines | `unit_tests/export-worker.test.ts` | `"Jo, Jr."` and `O""Brien` in output |
+| Writes empty CSV when export produces no rows | `unit_tests/export-worker.test.ts` | `writeFileSync` called with `''` |
+| Delegates to `exportDepartments`, `exportCourses`, `exportSemesters` per entity type | `unit_tests/export-worker.test.ts` | only correct service function called |
+| Marks job `failed` and skips file write for unsupported entity types | `unit_tests/export-worker.test.ts` | `writeFileSync` not called |
+| Creates `FileAsset` linked to job creator's `userId` | `unit_tests/export-worker.test.ts` | `uploadedByUserId` = `createdByUserId` |
+| `ImportWorker`: exposes `import` as worker type | `unit_tests/import-worker.test.ts` | `worker.type` value |
+| Imports students from inline payload rows and marks job `success` when all rows pass | `unit_tests/import-worker.test.ts` | `status='success'`, `importRowError.createMany` not called |
+| Marks `partial_success` and writes error-report CSV when some rows fail | `unit_tests/import-worker.test.ts` | `importRowError.createMany` called, CSV contains `Row,Field,Error` header |
+| Marks `failed` when every row is rejected | `unit_tests/import-worker.test.ts` | `status='failed'`, `successRows=0` |
+| Loads rows from CSV `FileAsset` when no inline rows provided | `unit_tests/import-worker.test.ts` | `readFileSync` called; service receives parsed rows |
+| Warns and treats rows as empty when file asset not found on disk | `unit_tests/import-worker.test.ts` | `readFileSync` not called; empty import succeeds |
+| Marks job `failed` for unsupported entity types | `unit_tests/import-worker.test.ts` | no importer called |
+| Delegates to `importClasses`, `importDepartments`, `importCourses`, `importSemesters` | `unit_tests/import-worker.test.ts` | entity-type routing |
+| Error-report CSV escapes embedded quotes in field values | `unit_tests/import-worker.test.ts` | `""quote""` and `""hi""` doubled |
 
 ---
 
@@ -286,6 +484,18 @@ COVERAGE=true ./run_tests.sh
 | `DELETE .../thresholds` (not found) → 404 | `api_tests/observability.api.test.ts` | NOT_FOUND |
 | `GET /api/observability/alerts` → 200 + events | `api_tests/observability.api.test.ts` | data.events array |
 | `POST .../alerts/:id/acknowledge` → 200 | `api_tests/observability.api.test.ts` | userId passed |
+| `GET /api/observability/thresholds` → 200 + thresholds scoped to org | `api_tests/observability.api.test.ts` | `listAlertThresholds` called with orgId |
+| `GET /api/observability/thresholds` (no read:observability) → 403 | `api_tests/observability.api.test.ts` | permission gate |
+| `PATCH /api/observability/thresholds/:id` (OpsManager) → 200 | `api_tests/observability.api.test.ts` | `updateAlertThreshold` called with id + body + orgId |
+| `PATCH /api/observability/thresholds/:id` (empty body) → 400 | `api_tests/observability.api.test.ts` | VALIDATION_ERROR |
+| `PATCH /api/observability/thresholds/:id` (not found) → 404 | `api_tests/observability.api.test.ts` | NotFoundError mapped |
+| `PATCH /api/observability/thresholds/:id` (ineligible role) → 403 | `api_tests/observability.api.test.ts` | role gate |
+| `GET /api/observability/notifications` → 200 + list | `api_tests/observability.api.test.ts` | `listNotifications` returns data |
+| `GET /api/observability/notifications` (unreadOnly=true) → forwards flag | `api_tests/observability.api.test.ts` | `unreadOnly: true` passed through |
+| `GET /api/observability/notifications` (no read:observability) → 403 | `api_tests/observability.api.test.ts` | permission gate |
+| `POST /api/observability/notifications/:id/read` → 200 + marked read | `api_tests/observability.api.test.ts` | `markNotificationRead` called |
+| `POST /api/observability/notifications/:id/read` (not found) → 404 | `api_tests/observability.api.test.ts` | NotFoundError mapped |
+| `POST /api/observability/notifications/:id/read` (no write:observability) → 403 | `api_tests/observability.api.test.ts` | permission gate |
 | ObservabilityView: 4 tabs rendered | `frontend/unit_tests/observability-view.test.ts` | Metrics/Logs/Alerts/Notifs |
 | Metrics tab: KPI cards show values | `frontend/unit_tests/observability-view.test.ts` | p95, cpu values |
 | Metrics fetch error → error state | `frontend/unit_tests/observability-view.test.ts` | error message shown |
@@ -302,6 +512,22 @@ COVERAGE=true ./run_tests.sh
 | Mark read button for unread notification | `frontend/unit_tests/observability-view.test.ts` | button present |
 | Mark read button hidden for read notification | `frontend/unit_tests/observability-view.test.ts` | button absent |
 | Audible notification increase triggers in-app cue | `frontend/unit_tests/observability-view.test.ts` | `AudioContext` invoked when unread audible count rises |
+| `recordMetric`: inserts metric; no alert when no active thresholds | `unit_tests/observability-service-unit.test.ts` | `createAlertEvent` not called |
+| `recordMetric`: passes optional `orgId` through to `insertMetric` | `unit_tests/observability-service-unit.test.ts` | `orgId` field present |
+| `recordMetric`: does NOT trigger alert when value doesn't satisfy operator | `unit_tests/observability-service-unit.test.ts` | `createNotification` not called |
+| `recordMetric`: creates banner notification when non-error_rate threshold triggered | `unit_tests/observability-service-unit.test.ts` | `type='banner'`, message contains metric name |
+| `recordMetric`: creates BOTH banner AND audible notifications for `error_rate` threshold | `unit_tests/observability-service-unit.test.ts` | `createNotification` called twice |
+| `recordMetric`: forwards threshold `orgId` to `createAlertEvent` and `createNotification` | `unit_tests/observability-service-unit.test.ts` | org-scoped alert |
+| `recordMetric`: evaluates all matching thresholds independently in one call | `unit_tests/observability-service-unit.test.ts` | 2 of 3 triggered |
+| `getMetricsSummary`: returns null fields when no metrics recorded | `unit_tests/observability-service-unit.test.ts` | all null |
+| `getMetricsSummary`: maps p95_latency, cpu/gpu_utilization, error_rate to summary fields | `unit_tests/observability-service-unit.test.ts` | correct field mapping |
+| `getMetricsSummary`: ignores unknown metric names without throwing | `unit_tests/observability-service-unit.test.ts` | no error |
+| `searchLogs`: passes pagination defaults (page=1, limit=50) to repo | `unit_tests/observability-service-unit.test.ts` | defaults enforced |
+| `createAlertThreshold`: forwards data + orgId to repo | `unit_tests/observability-service-unit.test.ts` | orgId included |
+| `updateAlertThreshold` / `deleteAlertThreshold`: forward id, payload, orgId | `unit_tests/observability-service-unit.test.ts` | repo called correctly |
+| `listAlertEvents`: maps rows to `AlertEventResponse` with ISO timestamps | `unit_tests/observability-service-unit.test.ts` | timestamp strings, null for unacknowledged |
+| `listNotifications`: passes `unreadOnly` + `orgId` to repo | `unit_tests/observability-service-unit.test.ts` | default `unreadOnly=false` |
+| `markNotificationRead`: forwards id and orgId | `unit_tests/observability-service-unit.test.ts` | repo called |
 
 ---
 
@@ -324,6 +550,9 @@ COVERAGE=true ./run_tests.sh
 | `PATCH /api/config` (Auditor) → 403 | `api_tests/config.api.test.ts` | role gate |
 | `PATCH /api/config` (negative value) → 400 | `api_tests/config.api.test.ts` | VALIDATION_ERROR |
 | `PATCH /api/config` (boolean as string) → 400 | `api_tests/config.api.test.ts` | type validation |
+| `GET /api/config` no-mock integration path returns config envelope | `api_tests/integration/config-api.integration.test.ts` | success + config payload |
+| `PATCH /api/config` no-mock integration updates runtime config | `api_tests/integration/config-api.integration.test.ts` | updated fields returned |
+| `PATCH /api/config` no-mock integration enforces admin-only writes | `api_tests/integration/config-api.integration.test.ts` | non-admin write returns 403 |
 | Partial PATCH only changes given fields | `api_tests/config.api.test.ts` | single field update |
 | `POST /api/backups` → 202 | `api_tests/backups.api.test.ts` | backup enqueued |
 | `GET /api/backups` → 200 + list | `api_tests/backups.api.test.ts` | array in response |
@@ -337,6 +566,18 @@ COVERAGE=true ./run_tests.sh
 | Trigger Backup: Administrator only | `frontend/unit_tests/admin-config-backups.test.ts` | button visibility |
 | Restore button: only for completed backups | `frontend/unit_tests/admin-config-backups.test.ts` | running → no button |
 | Restore button: Administrator only | `frontend/unit_tests/admin-config-backups.test.ts` | OpsManager → hidden |
+| `triggerBackup`: defaults to FULL backup type with date-prefixed storage path | `unit_tests/backups-service-unit.test.ts` | path matches `/YYYY-MM-DD$` |
+| `triggerBackup`: passes explicit backup type to repo and job payload | `unit_tests/backups-service-unit.test.ts` | `'incremental'` forwarded |
+| `listBackups`: maps records to `BackupRecordResponse` with ISO timestamps; BigInt serialized as string | `unit_tests/backups-service-unit.test.ts` | `sizeBytes` is string |
+| `listBackups`: returns `[]` when no backup records exist | `unit_tests/backups-service-unit.test.ts` | empty array |
+| `getBackupById`: returns null when backup not found | `unit_tests/backups-service-unit.test.ts` | null passthrough |
+| `getBackupById`: parses JSON `verificationResult` and formats `performedBy` username | `unit_tests/backups-service-unit.test.ts` | parsed object, null fallback |
+| `triggerRestore`: creates restore run and enqueues restore job | `unit_tests/backups-service-unit.test.ts` | `enqueueJob('restore', ...)` called |
+| `listRestoreRuns`: maps with username fallback to `performedByUserId` when `performedBy` is null | `unit_tests/backups-service-unit.test.ts` | fallback to user ID string |
+| `LogRetentionWorker`: deletes logs older than configured retention cutoff | `unit_tests/log-retention-worker.test.ts` | cutoff ≈ now − `logRetentionDays` |
+| Honors custom retention window from configuration (`logRetentionDays=7`) | `unit_tests/log-retention-worker.test.ts` | 7-day cutoff computed |
+| Exposes `log_retention` as worker type | `unit_tests/log-retention-worker.test.ts` | `worker.type` value |
+| Completes successfully when no rows are deleted | `unit_tests/log-retention-worker.test.ts` | resolves undefined |
 
 ---
 
@@ -439,6 +680,53 @@ COVERAGE=true ./run_tests.sh
 | Missing file on disk returns NOT_FOUND envelope | `api_tests/files.api.test.ts` | absent storage path maps to 404 |
 | Upload rejects unsupported MIME type with validation envelope | `api_tests/files.api.test.ts` | POST `/api/files` text/plain returns 400 VALIDATION_ERROR |
 | Upload rejects oversize payload with validation envelope | `api_tests/files.api.test.ts` | POST `/api/files` >10MB returns 400 VALIDATION_ERROR |
+
+---
+
+## 18. Master Data — Organizations, Campuses, Students & Academic Data
+
+| Requirement | Test File | Key Assertions |
+|------------|-----------|---------------|
+| `GET /api/orgs` (no token) → 401 UNAUTHORIZED | `api_tests/master-data-orgs.api.test.ts` | unauthenticated request rejected |
+| `GET /api/orgs` (Administrator) → 200, all orgs | `api_tests/master-data-orgs.api.test.ts` | `listOrgs(undefined)` — no org filter |
+| `GET /api/orgs` (OpsManager) → 200, org-scoped | `api_tests/master-data-orgs.api.test.ts` | `listOrgs(orgId)` — caller's org only |
+| `GET /api/orgs` (OpsManager, no orgId in token) → 401 | `api_tests/master-data-orgs.api.test.ts` | missing org context rejected |
+| `GET /api/orgs/:orgId` → 200 with org details | `api_tests/master-data.api.test.ts` | `findOrgById` result in envelope |
+| `GET /api/orgs/:orgId/campuses` → 200 with campus list | `api_tests/master-data.api.test.ts` | `findCampusesByOrg` result |
+| `GET /api/orgs/:orgId/students` → 200 paginated | `api_tests/master-data.api.test.ts` | `data.total` present |
+| `POST /api/orgs/:orgId/students` → 201 with student record | `api_tests/master-data.api.test.ts` | `studentNumber` in response |
+| `GET /api/orgs/:orgId/students/:id` → 200 with details | `api_tests/master-data.api.test.ts` | `getStudentById` forwarded |
+| `PATCH /api/orgs/:orgId/students/:id` → 200 with updates | `api_tests/master-data.api.test.ts` | updated field returned |
+| `GET /api/orgs/:orgId/departments` → 200 with departments | `api_tests/master-data.api.test.ts` | list in envelope |
+| `POST /api/orgs/:orgId/departments` → 201 with department | `api_tests/master-data.api.test.ts` | `code` in response |
+| `POST /api/orgs/:orgId/courses` → 201 with course | `api_tests/master-data.api.test.ts` | `code` in response |
+| `GET /api/orgs/:orgId/semesters` → 200 with semesters | `api_tests/master-data.api.test.ts` | list in envelope |
+| `POST /api/orgs/:orgId/semesters` (OpsManager) → 201 | `api_tests/master-data.api.test.ts` | `name` in response |
+| `POST /api/orgs/:orgId/classes` → 201 with class | `api_tests/master-data.api.test.ts` | `section` in response |
+| `getStudentById`: returns student when found | `unit_tests/master-data-service-unit.test.ts` | result passed through |
+| `getStudentById`: throws NotFoundError when student not found | `unit_tests/master-data-service-unit.test.ts` | null → error |
+| `importStudents`: upserts every valid row and reports `successCount` | `unit_tests/master-data-service-unit.test.ts` | `upsertStudentByNumber` called per row |
+| `importStudents`: emits `failedRow` per missing required field via Zod | `unit_tests/master-data-service-unit.test.ts` | `field='studentNumber'`, `rowNumber=1` |
+| `importStudents`: captures repository upsert errors as `failedRows` | `unit_tests/master-data-service-unit.test.ts` | DB error surfaced with `rawValue` |
+| `importStudents`: mixes valid and invalid rows in single batch | `unit_tests/master-data-service-unit.test.ts` | `successCount=2`, `failedRows=[row2]` |
+| `importStudents`: `rawValue=null` when failing field absent from row | `unit_tests/master-data-service-unit.test.ts` | null not empty string |
+| `importClasses`: flags missing `courseId`/`semesterId`/`section` before any DB lookup | `unit_tests/master-data-service-unit.test.ts` | repo not called |
+| `importClasses`: flags row when course or semester not found | `unit_tests/master-data-service-unit.test.ts` | `field='courseId'`/`'semesterId'` |
+| `importClasses`: default capacity is 30 when omitted | `unit_tests/master-data-service-unit.test.ts` | `capacity=30` in `createClass` call |
+| `importClasses`: captures duplicate-class errors at `section` field | `unit_tests/master-data-service-unit.test.ts` | UNIQUE constraint → failedRow |
+| `importDepartments`: flags missing `campusId`/`name`/`code` | `unit_tests/master-data-service-unit.test.ts` | repo not called |
+| `importDepartments`: creates department when all fields present | `unit_tests/master-data-service-unit.test.ts` | `successCount=1` |
+| `importDepartments`: captures duplicate-department errors at `code` field | `unit_tests/master-data-service-unit.test.ts` | UNIQUE → failedRow |
+| `importCourses`: flags missing `deptId`/`name`/`code`; flags row when department missing | `unit_tests/master-data-service-unit.test.ts` | repo not called on missing fields |
+| `importSemesters`: flags missing `name`/`startDate`/`endDate` | `unit_tests/master-data-service-unit.test.ts` | `createSemester` not called |
+| `importSemesters`: creates semester when all fields present | `unit_tests/master-data-service-unit.test.ts` | `successCount=1` |
+| `exportStudents`: projects each student to export row shape; null email → empty string | `unit_tests/master-data-service-unit.test.ts` | ISO timestamps, null→`''` |
+| `exportDepartments`: flattens all departments across every campus in the org | `unit_tests/master-data-service-unit.test.ts` | 3 departments from 2 campuses |
+| `exportDepartments`: returns `[]` when org has no campuses | `unit_tests/master-data-service-unit.test.ts` | empty array |
+| `exportCourses`: flattens courses across all departments across all campuses | `unit_tests/master-data-service-unit.test.ts` | 2 courses, correct credits |
+| `exportSemesters`: serializes `Date` fields as ISO strings | `unit_tests/master-data-service-unit.test.ts` | `startDate`/`endDate` ISO |
+| `exportClasses`: flattens classes across all semesters, includes course name | `unit_tests/master-data-service-unit.test.ts` | `courseName` from relation |
+| `exportClasses`: returns `[]` when org has no semesters | `unit_tests/master-data-service-unit.test.ts` | empty array |
 
 ---
 

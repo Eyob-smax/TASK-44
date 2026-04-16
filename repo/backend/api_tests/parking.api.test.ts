@@ -15,6 +15,7 @@ vi.mock('../src/modules/parking/service.js', () => ({
 
 vi.mock('../src/modules/parking/repository.js', () => ({
   findFacilityById: vi.fn(),
+  listFacilities: vi.fn().mockResolvedValue([]),
   listFacilitiesByCampus: vi.fn().mockResolvedValue([]),
   createParkingEvent: vi.fn(),
   findActiveSessions: vi.fn().mockResolvedValue([]),
@@ -40,8 +41,8 @@ vi.mock('../src/app/container.js', () => ({
   },
 }));
 
-const { ingestParkingEvent } = await import('../src/modules/parking/service.js');
-const { resolveException, findExceptionById, findExceptions } = await import('../src/modules/parking/repository.js');
+const { ingestParkingEvent, getParkingStatusSummary } = await import('../src/modules/parking/service.js');
+const { resolveException, findExceptionById, findExceptions, listFacilities } = await import('../src/modules/parking/repository.js');
 
 const jwtSecret = process.env.JWT_SECRET ?? 'test-jwt-secret';
 
@@ -321,6 +322,80 @@ describe('GET /api/parking/exceptions/:id', () => {
 
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('GET /api/parking/facilities', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with facilities scoped to caller org', async () => {
+    vi.mocked(listFacilities).mockResolvedValue([
+      { id: 'fac-1', name: 'Lot A', campusId: 'campus-1', totalSpaces: 100 } as any,
+    ]);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/parking/facilities')
+      .set('Authorization', authHeader({ orgId: 'org-1' }));
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveLength(1);
+    expect(listFacilities).toHaveBeenCalledWith('org-1');
+  });
+
+  it('returns 403 when user lacks read:parking permission', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/parking/facilities')
+      .set('Authorization', authHeader({ roles: ['Viewer'], permissions: ['read:logistics:*'] }));
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('FORBIDDEN');
+  });
+});
+
+describe('GET /api/parking/facilities/:id/status', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with facility status summary', async () => {
+    vi.mocked(getParkingStatusSummary).mockResolvedValue({
+      facilityId: 'fac-1',
+      occupiedSpaces: 42,
+      availableSpaces: 58,
+      turnoverPerHour: 6,
+    } as any);
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/parking/facilities/fac-1/status')
+      .set('Authorization', authHeader({ orgId: 'org-1' }));
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.facilityId).toBe('fac-1');
+    expect(getParkingStatusSummary).toHaveBeenCalledWith('fac-1', 'org-1');
+  });
+
+  it('returns 404 when facility not found in caller org', async () => {
+    vi.mocked(getParkingStatusSummary).mockRejectedValue(new (await import('../src/common/errors/app-errors.js')).NotFoundError('Parking facility not found'));
+
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/parking/facilities/missing/status')
+      .set('Authorization', authHeader({ orgId: 'org-1' }));
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('returns 403 when user lacks read:parking permission', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/parking/facilities/fac-1/status')
+      .set('Authorization', authHeader({ roles: ['Viewer'], permissions: ['read:logistics:*'] }));
+
+    expect(res.status).toBe(403);
   });
 });
 

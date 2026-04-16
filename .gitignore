@@ -8,7 +8,7 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
-
+scratch/
 # Environment files
 .env
 .env.*
@@ -28,6 +28,10 @@ repo/**/dist/
 coverage/
 repo/**/coverage/
 .vitest/
+playwright-report/
+test-results/
+repo/**/playwright-report/
+repo/**/test-results/
 
 # TypeScript and tool caches
 *.tsbuildinfo

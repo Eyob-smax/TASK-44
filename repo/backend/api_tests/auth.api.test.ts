@@ -48,6 +48,7 @@ vi.mock('../src/modules/auth/repository.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/modules/auth/repository.js')>();
   return {
     ...actual,
+    recordSecurityEvent: vi.fn().mockResolvedValue(undefined),
     findRolesByIds: vi.fn().mockResolvedValue([{ id: 'role-administrator', name: 'Administrator' }]),
     createUser: vi.fn().mockResolvedValue({
       id: 'user-ops-001',
@@ -92,7 +93,7 @@ vi.mock('../src/modules/auth/repository.js', async (importOriginal) => {
 
 const { createApp } = await import('../src/app/server.js');
 const app = createApp();
-const { createUser, findRolesByIds } = await import('../src/modules/auth/repository.js');
+const { createUser, findRolesByIds, recordSecurityEvent } = await import('../src/modules/auth/repository.js');
 const { config } = await import('../src/app/config.js');
 
 function makeToken(payload: Record<string, unknown>): string {
@@ -192,6 +193,40 @@ describe('GET /api/auth/me', () => {
     expect(meRes.body.success).toBe(true);
     expect(meRes.body.data.user.username).toBe('alice');
     expect(meRes.body.data.permissions).toContain('read:audit-logs:*');
+  });
+});
+
+describe('POST /api/auth/logout', () => {
+  it('returns 401 when no Authorization header is provided', async () => {
+    const res = await request(app).post('/api/auth/logout');
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('UNAUTHORIZED');
+  });
+
+  it('returns 200 with success envelope and records security event when authenticated', async () => {
+    vi.mocked(recordSecurityEvent).mockClear();
+    const token = makeToken({
+      userId: 'user-001',
+      username: 'alice',
+      roles: ['Auditor'],
+      permissions: ['read:audit-logs:*'],
+      orgId: 'org-1',
+    });
+
+    const res = await request(app)
+      .post('/api/auth/logout')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toBeNull();
+    expect(recordSecurityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'logout',
+        userId: 'user-001',
+        details: expect.objectContaining({ username: 'alice' }),
+      }),
+    );
   });
 });
 
