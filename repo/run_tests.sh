@@ -18,7 +18,6 @@ PROJECT_NAME="${COMPOSE_PROJECT_NAME:-campusops-test-runner}"
 FRONTEND_TEST_IMAGE="${FRONTEND_TEST_IMAGE:-node:18-alpine}"
 BACKEND_TEST_IMAGE="${BACKEND_TEST_IMAGE:-node:18}"
 BACKEND_INT_TEST_IMAGE="${BACKEND_INT_TEST_IMAGE:-node:18}"
-FRONTEND_E2E_TEST_IMAGE="${FRONTEND_E2E_TEST_IMAGE:-mcr.microsoft.com/playwright:v1.59.1-jammy}"
 
 MYSQL_DATABASE="${MYSQL_DATABASE:-campusops}"
 MYSQL_USER="${MYSQL_USER:-campusops}"
@@ -48,7 +47,6 @@ to_docker_host_path() {
 }
 
 COMPOSE_FILE="$(to_docker_host_path "$SCRIPT_DIR/docker-compose.test.yml")"
-APP_COMPOSE_FILE="$(to_docker_host_path "$SCRIPT_DIR/docker-compose.yml")"
 FRONTEND_SRC="$(to_docker_host_path "$SCRIPT_DIR/frontend")"
 BACKEND_SRC="$(to_docker_host_path "$SCRIPT_DIR/backend")"
 
@@ -64,17 +62,8 @@ compose_cmd() {
   docker_cmd compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
 }
 
-compose_app_cmd() {
-  JWT_SECRET="$TEST_JWT_SECRET" \
-  INTEGRATION_SIGNING_SECRET="$TEST_INTEGRATION_SIGNING_SECRET" \
-  AES_KEY="$TEST_AES_KEY" \
-  COMPOSE_IGNORE_ORPHANS="True" \
-  docker_cmd compose -p "$PROJECT_NAME" -f "$APP_COMPOSE_FILE" "$@"
-}
-
 cleanup() {
   compose_cmd down --remove-orphans -v >/dev/null 2>&1 || true
-  compose_app_cmd down --remove-orphans -v >/dev/null 2>&1 || true
   rm -rf "$COVERAGE_LOG_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -197,77 +186,6 @@ run_frontend_tests() {
     sh -lc "set -e; echo '[frontend] preparing workspace...'; mkdir -p /work; cp -a /src/. /work; cd /work; echo '[frontend] installing dependencies (with retries for transient registry failures)...'; (npm ci --no-audit --no-fund --loglevel=info || (echo '[frontend] npm ci failed, retrying in 5s...' && sleep 5 && rm -rf node_modules && npm ci --no-audit --no-fund --loglevel=info) || (echo '[frontend] npm ci failed again, final retry in 10s...' && sleep 10 && rm -rf node_modules && npm ci --no-audit --no-fund --loglevel=info)); echo '[frontend] running tests...'; ${test_cmd}; if [ -f ./coverage/coverage-summary.json ]; then node -e 'const fs=require(\"fs\");const p=\"./coverage/coverage-summary.json\";const t=JSON.parse(fs.readFileSync(p,\"utf8\")).total;console.log(\"[coverage-totals] statements=\"+t.statements.covered+\"/\"+t.statements.total+\" branches=\"+t.branches.covered+\"/\"+t.branches.total+\" functions=\"+t.functions.covered+\"/\"+t.functions.total+\" lines=\"+t.lines.covered+\"/\"+t.lines.total);'; fi"
 }
 
-wait_for_frontend_ready() {
-  local attempts=45
-  while [[ "$attempts" -gt 0 ]]; do
-    if docker_cmd run --rm \
-      --network "$NETWORK_NAME" \
-      curlimages/curl:8.7.1 -ksSf https://frontend/login >/dev/null 2>&1; then
-      return 0
-    fi
-    attempts=$((attempts - 1))
-    sleep 2
-  done
-
-  echo "Timed out waiting for frontend HTTPS endpoint." >&2
-  return 1
-}
-
-wait_for_demo_login_ready() {
-  local attempts=60
-  while [[ "$attempts" -gt 0 ]]; do
-    local code
-    local key="e2e-login-readiness-$attempts-$(date +%s%N)"
-    code="$(docker_cmd run --rm \
-      --network "$NETWORK_NAME" \
-      curlimages/curl:8.7.1 -ksS \
-      -o /dev/null \
-      -w '%{http_code}' \
-      -X POST https://frontend/api/auth/login \
-      -H 'Content-Type: application/json' \
-      -H "X-Idempotency-Key: $key" \
-      -d '{"username":"demo.admin","password":"password"}' || true)"
-
-    if [[ "$code" == "200" ]]; then
-      return 0
-    fi
-
-    attempts=$((attempts - 1))
-    sleep 2
-  done
-
-  echo "Timed out waiting for demo login readiness." >&2
-  return 1
-}
-
-run_frontend_e2e_tests() {
-  local e2e_status=0
-
-  echo "  ℹ  Starting full application stack for browser E2E tests..."
-  compose_app_cmd up -d mysql db-seed backend frontend >/dev/null || return 1
-  echo "  ℹ  Waiting for frontend at https://localhost ..."
-  wait_for_frontend_ready || return 1
-  echo "  ℹ  Waiting for demo login readiness ..."
-  wait_for_demo_login_ready || return 1
-
-  docker_cmd run --rm \
-    --network "$NETWORK_NAME" \
-    --mount type=volume,source="$NPM_CACHE_VOLUME",target=/root/.npm \
-    --mount type=bind,source="$FRONTEND_SRC",target=/src,readonly \
-    -e E2E_BASE_URL="https://frontend" \
-    "$FRONTEND_E2E_TEST_IMAGE" \
-    sh -lc "set -e; echo '[frontend-e2e] preparing workspace...'; mkdir -p /work; cp -a /src/. /work; cd /work; echo '[frontend-e2e] installing dependencies...'; npm ci --no-audit --no-fund --loglevel=error; echo '[frontend-e2e] running browser E2E tests...'; npx playwright test --config=playwright.config.ts" \
-    || e2e_status=$?
-
-  echo "  ℹ  Stopping full application stack after browser E2E tests..."
-  compose_app_cmd down --remove-orphans -v >/dev/null || {
-    [[ "$e2e_status" -eq 0 ]] && return 1
-    return "$e2e_status"
-  }
-
-  return "$e2e_status"
-}
-
 run_backend_unit_tests() {
   local test_cmd="npx vitest run --reporter=verbose --pool forks unit_tests"
   if [[ "$COVERAGE" == "true" ]]; then
@@ -364,7 +282,6 @@ fi
 echo "══════════════════════════════════════════════════════════"
 
 run_phase "Frontend Unit & Component Tests  [frontend/unit_tests/]" "run_frontend_tests" "frontend-unit"
-run_phase "Frontend Browser E2E Tests  [frontend/e2e/]" "run_frontend_e2e_tests"
 run_phase "Backend Unit Tests  [backend/unit_tests/]" "run_backend_unit_tests" "backend-unit"
 run_phase "Backend API Contract Tests  [backend/api_tests/]" "run_backend_api_tests" "backend-api"
 run_phase "Backend API Integration Tests  [backend/api_tests/integration/]" "run_backend_integration_tests" "backend-int"

@@ -8,7 +8,6 @@ pnpm-debug.log*
 # Build/test outputs
 dist
 coverage
-playwright-report
 test-results
 .vitest
 
@@ -26,7 +25,5 @@ test-results
 .cache
 
 # Test-only assets not needed for production image build
-e2e
 unit_tests
-playwright.config.ts
 vitest.config.ts
