@@ -201,8 +201,8 @@ wait_for_frontend_ready() {
   local attempts=45
   while [[ "$attempts" -gt 0 ]]; do
     if docker_cmd run --rm \
-      --add-host=host.docker.internal:host-gateway \
-      curlimages/curl:8.7.1 -ksSf https://host.docker.internal/login >/dev/null 2>&1; then
+      --network "$NETWORK_NAME" \
+      curlimages/curl:8.7.1 -ksSf https://frontend/login >/dev/null 2>&1; then
       return 0
     fi
     attempts=$((attempts - 1))
@@ -213,26 +213,63 @@ wait_for_frontend_ready() {
   return 1
 }
 
+wait_for_demo_login_ready() {
+  local attempts=60
+  while [[ "$attempts" -gt 0 ]]; do
+    local code
+    local key="e2e-login-readiness-$attempts-$(date +%s%N)"
+    code="$(docker_cmd run --rm \
+      --network "$NETWORK_NAME" \
+      curlimages/curl:8.7.1 -ksS \
+      -o /dev/null \
+      -w '%{http_code}' \
+      -X POST https://frontend/api/auth/login \
+      -H 'Content-Type: application/json' \
+      -H "X-Idempotency-Key: $key" \
+      -d '{"username":"demo.admin","password":"password"}' || true)"
+
+    if [[ "$code" == "200" ]]; then
+      return 0
+    fi
+
+    attempts=$((attempts - 1))
+    sleep 2
+  done
+
+  echo "Timed out waiting for demo login readiness." >&2
+  return 1
+}
+
 run_frontend_e2e_tests() {
+  local e2e_status=0
+
   echo "  ℹ  Starting full application stack for browser E2E tests..."
   compose_app_cmd up -d mysql db-seed backend frontend >/dev/null || return 1
   echo "  ℹ  Waiting for frontend at https://localhost ..."
   wait_for_frontend_ready || return 1
+  echo "  ℹ  Waiting for demo login readiness ..."
+  wait_for_demo_login_ready || return 1
 
   docker_cmd run --rm \
-    --add-host=host.docker.internal:host-gateway \
+    --network "$NETWORK_NAME" \
     --mount type=volume,source="$NPM_CACHE_VOLUME",target=/root/.npm \
     --mount type=bind,source="$FRONTEND_SRC",target=/src,readonly \
-    -e E2E_BASE_URL="https://host.docker.internal" \
+    -e E2E_BASE_URL="https://frontend" \
     "$FRONTEND_E2E_TEST_IMAGE" \
-    sh -lc "set -e; echo '[frontend-e2e] preparing workspace...'; mkdir -p /work; cp -a /src/. /work; cd /work; echo '[frontend-e2e] installing dependencies...'; npm ci --no-audit --no-fund --loglevel=error; echo '[frontend-e2e] running browser E2E tests...'; npx playwright test --config=playwright.config.ts"
+    sh -lc "set -e; echo '[frontend-e2e] preparing workspace...'; mkdir -p /work; cp -a /src/. /work; cd /work; echo '[frontend-e2e] installing dependencies...'; npm ci --no-audit --no-fund --loglevel=error; echo '[frontend-e2e] running browser E2E tests...'; npx playwright test --config=playwright.config.ts" \
+    || e2e_status=$?
 
   echo "  ℹ  Stopping full application stack after browser E2E tests..."
-  compose_app_cmd down --remove-orphans -v >/dev/null || return 1
+  compose_app_cmd down --remove-orphans -v >/dev/null || {
+    [[ "$e2e_status" -eq 0 ]] && return 1
+    return "$e2e_status"
+  }
+
+  return "$e2e_status"
 }
 
 run_backend_unit_tests() {
-  local test_cmd="npx vitest run --reporter=verbose unit_tests"
+  local test_cmd="npx vitest run --reporter=verbose --pool forks unit_tests"
   if [[ "$COVERAGE" == "true" ]]; then
     test_cmd+=" --coverage --coverage.thresholds.statements=0 --coverage.thresholds.branches=0 --coverage.thresholds.functions=0 --coverage.thresholds.lines=0 --coverage.reporter=json-summary"
   fi
@@ -241,6 +278,7 @@ run_backend_unit_tests() {
     --mount type=volume,source="$NPM_CACHE_VOLUME",target=/root/.npm \
     --mount type=bind,source="$BACKEND_SRC",target=/src,readonly \
     -e DATABASE_URL="$DATABASE_URL" \
+    -e PRISMA_CLIENT_ENGINE_TYPE="binary" \
     -e JWT_SECRET="$TEST_JWT_SECRET" \
     -e AES_KEY="$TEST_AES_KEY" \
     -e INTEGRATION_SIGNING_SECRET="$TEST_INTEGRATION_SIGNING_SECRET" \
@@ -259,6 +297,7 @@ run_backend_api_tests() {
     --mount type=volume,source="$NPM_CACHE_VOLUME",target=/root/.npm \
     --mount type=bind,source="$BACKEND_SRC",target=/src,readonly \
     -e DATABASE_URL="$DATABASE_URL" \
+    -e PRISMA_CLIENT_ENGINE_TYPE="binary" \
     -e JWT_SECRET="$TEST_JWT_SECRET" \
     -e AES_KEY="$TEST_AES_KEY" \
     -e INTEGRATION_SIGNING_SECRET="$TEST_INTEGRATION_SIGNING_SECRET" \
@@ -301,6 +340,7 @@ run_backend_integration_tests() {
     --network "$NETWORK_NAME" \
     --mount type=volume,source="$NPM_CACHE_VOLUME",target=/root/.npm \
     -e DATABASE_URL="$DATABASE_URL" \
+    -e PRISMA_CLIENT_ENGINE_TYPE="binary" \
     -e MYSQL_SSL_MODE="DISABLED" \
     -e JWT_SECRET="$TEST_JWT_SECRET" \
     -e AES_KEY="$TEST_AES_KEY" \
